@@ -12,8 +12,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="台股多頭獵人 V10.0", layout="wide")
-st.title("📈 台股多頭獵人 V10.0 - 新聞戰情室版")
+st.set_page_config(page_title="艾倫杭特 V10.0", layout="wide")
+st.title("📈 艾倫杭特 V10.0 - 新聞戰情室版")
 
 # ==========================================
 # 🔑 LINE 設定區
