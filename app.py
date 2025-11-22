@@ -4,20 +4,21 @@ import pandas as pd
 import pandas_ta as ta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import requests # 用來發送 LINE 請求
+import requests
 import json
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="台股多頭獵人 V9.0", layout="wide")
-st.title("📈 台股多頭獵人 V9.0 - LINE 戰情通知版")
+st.set_page_config(page_title="台股多頭獵人 V9.1", layout="wide")
+st.title("📈 台股多頭獵人 V9.1 - 全功能終極版")
 
 # ==========================================
-# 🔑 LINE 設定區 (請填入您剛剛申請的資料)
+# 🔑 LINE 設定區 (請填入您的資料)
 # ==========================================
-# 1. 在 Basic Settings 頁面最下方
-LINE_USER_ID = "U2e18c346fe075d2f62986166a4a6ef1c"  # 請將您的 User ID 填入引號內
-# 2. 在 Messaging API 頁面最下方按 Issue
-LINE_CHANNEL_TOKEN = "DNsc+VqdlEliUHVd92ozW59gLdEDJULKIslQOqlTsP6qs5AY3Ydaj8X8l1iShfRHFzWpL++lbb5e4GiDHrioF6JdwmsiA/OHjaB4ZZYGG1TqwUth6hfcbHrHgVscPSZmVGIx4n/ZXYAZhPrvGCKqiwdB04t89/1O/w1cDnyilFU=" # 請將您的 Access Token 填入引號內
+LINE_USER_ID = "U2e18c346fe075d2f62986166a4a6ef1c" 
+LINE_CHANNEL_TOKEN = "DNsc+VqdlEliUHVd92ozW59gLdEDJULKIslQOqlTsP6qs5AY3Ydaj8X8l1iShfRHFzWpL++lbb5e4GiDHrioF6JdwmsiA/OHjaB4ZZYGG1TqwUth6hfcbHrHgVscPSZmVGIx4n/ZXYAZhPrvGCKqiwdB04t89/1O/w1cDnyilFU="
 
 # --- LINE 發送函數 ---
 def send_line_message(message_text):
@@ -28,21 +29,13 @@ def send_line_message(message_text):
     }
     payload = {
         "to": LINE_USER_ID,
-        "messages": [
-            {
-                "type": "text",
-                "text": message_text
-            }
-        ]
+        "messages": [{"type": "text", "text": message_text}]
     }
     try:
         response = requests.post(url, headers=headers, data=json.dumps(payload))
-        if response.status_code == 200:
-            st.toast("✅ LINE 訊息發送成功！", icon="📲")
-        else:
-            st.error(f"發送失敗：{response.text}")
-    except Exception as e:
-        st.error(f"連線錯誤：{e}")
+        if response.status_code == 200: st.toast("✅ LINE 發送成功！", icon="📲")
+        else: st.error(f"發送失敗：{response.text}")
+    except Exception as e: st.error(f"連線錯誤：{e}")
 
 # --- 0.1 中文名稱對照表 ---
 STOCK_NAMES = {
@@ -189,6 +182,8 @@ def calculate_indicators(df):
     df = pd.concat([df, k_d], axis=1)
     bb = ta.bbands(df['Close'], length=20, std=2)
     df = pd.concat([df, bb], axis=1)
+    # V8.0 補回: RSI
+    df['RSI'] = ta.rsi(df['Close'], length=14)
     return df
 
 def get_fundamentals(stock_obj):
@@ -277,8 +272,28 @@ def run_backtest(df, strategy, initial_capital=1000000):
         equity_curve.append({"Date": date, "Equity": cash + (position * price)})
     return pd.DataFrame(equity_curve), pd.DataFrame(trade_log), int(cash + (position * price))
 
+# --- V8.0 補回: AI 預測邏輯 ---
+def train_and_predict_ai(df):
+    data = df.copy()
+    data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
+    macd_col = data.columns[data.columns.str.startswith('MACDh')][0]
+    features = ['Close', 'Volume', 'RSI', macd_col]
+    data = data.dropna()
+    X = data[features]; y = data['Target']
+    split = int(len(X) * 0.8)
+    X_train, X_test = X.iloc[:split], X.iloc[split:]
+    y_train, y_test = y.iloc[:split], y.iloc[split:]
+    model = RandomForestClassifier(n_estimators=100, min_samples_split=10, random_state=42)
+    model.fit(X_train, y_train)
+    preds = model.predict(X_test)
+    acc = accuracy_score(y_test, preds)
+    latest_data = X.iloc[[-1]]
+    prediction = model.predict(latest_data)
+    prob = model.predict_proba(latest_data)[0][1]
+    return acc, prediction[0], prob, model.feature_importances_, features
+
 # --- 介面分頁 ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升選股", "🧪 策略回測實驗室"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測"])
 
 # ==========================================
 # 分頁 1: 個股詳細分析
@@ -321,13 +336,9 @@ with tab1:
                         v_cols[2].caption(f"基礎：每股淨值 {val_matrix['pb']['base']} 元")
                         v_cols[2].metric("目前狀態", val_matrix['pb']['status'], help="便宜: <1倍 / 昂貴: >2倍")
             
-            # V9.0: 個股 LINE 發送按鈕
+            # V9.0: 個股 LINE 發送
             if st.button(f"📤 傳送 {stock_name} 診斷到 LINE"):
-                msg = f"\n🔔 【個股診斷】{stock_name} ({selected_code})\n"
-                msg += f"💰 收盤價：{round(latest['Close'], 2)}\n"
-                msg += f"📊 MACD：{'紅柱增強' if hist_val > 0 and hist_val > df.iloc[-2][macd_col] else '動能減弱'}\n"
-                msg += f"📅 殖利率估價：{val_matrix['yield']['status'] if val_matrix else 'N/A'}\n"
-                msg += f"🚀 本益比估價：{val_matrix['pe']['status'] if val_matrix and 'pe' in val_matrix else 'N/A'}\n"
+                msg = f"\n🔔 【個股診斷】{stock_name} ({selected_code})\n💰 收盤價：{round(latest['Close'], 2)}\n📊 MACD：{'紅柱增強' if hist_val > 0 and hist_val > df.iloc[-2][macd_col] else '動能減弱'}\n📅 殖利率估價：{val_matrix['yield']['status'] if val_matrix else 'N/A'}\n🚀 本益比估價：{val_matrix['pe']['status'] if val_matrix and 'pe' in val_matrix else 'N/A'}\n"
                 send_line_message(msg)
 
             st.markdown("---")
@@ -360,6 +371,7 @@ with tab1:
 # ==========================================
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
+    st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
     if st.button("🚀 掃描觀察名單"):
         scan_results = []
         progress_bar = st.progress(0)
@@ -388,19 +400,16 @@ with tab2:
 
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
-        # V9.0: 掃描結果 LINE 發送按鈕
+        # V9.0: 掃描結果 LINE 發送
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
             msg = "🤖 【觀察名單掃描報告】\n"
             for index, row in res_df.iterrows():
-                # 只傳送有亮燈的 (簡化訊息量)
                 if row['KD金叉'] == '✅' or row['量能爆發'] == '🔥':
-                    msg += f"{row['名称']} ({row['代號']}): {row['漲幅%']}%\n"
+                    msg += f"{row['名稱']} ({row['代號']}): {row['漲幅%']}%\n"
                     if row['KD金叉'] == '✅': msg += "  - ✨ KD金叉\n"
                     if row['量能爆發'] == '🔥': msg += "  - 🔥 量能爆發\n"
-            if len(msg) > 20: # 確保有內容
-                send_line_message(msg)
-            else:
-                st.warning("沒有發現亮點股票，不發送訊息。")
+            if len(msg) > 20: send_line_message(msg)
+            else: st.warning("沒有發現亮點股票，不發送訊息。")
 
         event = st.dataframe(res_df.style.applymap(lambda x: 'color: red' if isinstance(x, float) and x > 0 else 'color: green' if isinstance(x, float) and x < 0 else '', subset=['漲幅%']), column_config={"收盤價": st.column_config.NumberColumn(format="%.2f"), "漲幅%": st.column_config.NumberColumn(format="%.2f%%")}, use_container_width=True, height=500, on_select="rerun", selection_mode="single-row")
         if event.selection.rows:
@@ -449,13 +458,11 @@ with tab3:
     if st.session_state.scan_result_tab3 is not None and not st.session_state.scan_result_tab3.empty:
         rev_df = st.session_state.scan_result_tab3
         st.success(f"發現 {len(rev_df)} 檔潛在轉折股！")
-        
-        # V9.0: 轉折獵人 LINE 發送按鈕
+        # V9.0: 轉折獵人 LINE 發送
         if st.button("📤 將轉折清單傳送到 LINE (Tab3)"):
             msg = f"🔥 【轉折獵人】發現 {len(rev_df)} 檔潛力股\n板塊：{target_sector}\n"
             for index, row in rev_df.iterrows():
-                msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n"
-                msg += f"   理由：{row['觸發條件']}\n"
+                msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n   理由：{row['觸發條件']}\n"
             send_line_message(msg)
 
         event = st.dataframe(rev_df, column_config={"收盤價": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True, on_select="rerun", selection_mode="single-row")
@@ -468,9 +475,6 @@ with tab3:
                 st.rerun()
     elif st.session_state.scan_result_tab3 is not None: st.info("未發現明顯訊號。")
 
-# ==========================================
-# 分頁 4 & 5: 三率與回測 (保持不變)
-# ==========================================
 with tab4:
     st.subheader("💎 三率三升選股 - 基本面掃描")
     target_sector_f = st.selectbox("選擇掃描板塊", options=list(SECTOR_DICT.keys()), key="fund_sector")
@@ -492,6 +496,7 @@ with tab4:
             except: pass
             progress.progress((i+1)/total_scan)
         progress.empty()
+        status.text("基本面掃描完成！")
         st.session_state.scan_result_tab4 = pd.DataFrame(fund_results)
     if st.session_state.scan_result_tab4 is not None and not st.session_state.scan_result_tab4.empty:
         fund_df = st.session_state.scan_result_tab4
@@ -534,3 +539,51 @@ with tab5:
             fig.update_layout(height=400)
             st.plotly_chart(fig, use_container_width=True)
         else: st.error("無法取得歷史數據。")
+
+# --- V8.0 補回: AI 趨勢預測 (Tab 6) ---
+with tab6:
+    st.subheader("🔮 AI 趨勢預測 (Random Forest)")
+    st.markdown("""
+    **原理：** 利用機器學習模型，分析過去的 **收盤價、成交量、RSI、MACD** 與隔日漲跌的關係，預測明日走勢。
+    * 🎯 **準確度 (Accuracy)：** 代表模型在過去測試資料中的預測正確率。
+    * 📈 **上漲機率：** AI 認為明天會收紅的信心程度。
+    """)
+    
+    if st.button("🧠 啟動 AI 模型運算"):
+        target_name = st.session_state.watchlist.get(selected_code, selected_code)
+        
+        # 1. 抓取足夠長的資料來訓練 (至少 5 年)
+        df_ai, _ = get_stock_data(selected_code, 0, interval="1d")
+        t_ai = yf.Ticker(f"{selected_code}.TW")
+        df_ai = t_ai.history(period="max")
+        
+        if len(df_ai) > 200:
+            # 2. 計算指標
+            df_ai = calculate_indicators(df_ai)
+            
+            with st.spinner(f"AI 正在學習 {target_name} 的歷史股性..."):
+                # 3. 訓練與預測
+                acc, pred, prob, importances, feature_names = train_and_predict_ai(df_ai)
+            
+            # 4. 顯示結果
+            col1, col2 = st.columns(2)
+            result_text = "📈 看漲 (Bullish)" if pred == 1 else "📉 看跌 (Bearish)"
+            result_color = "green" if pred == 0 else "red"
+            
+            col1.markdown(f"### AI 預測明日： :{result_color}[{result_text}]")
+            col1.metric("上漲機率", f"{round(prob * 100, 1)}%")
+            col1.metric("模型回測準確度", f"{round(acc * 100, 1)}%")
+            
+            if acc < 0.5: col1.warning("⚠️ 模型準確度低於 50%，參考價值較低。")
+            
+            # V9.0: AI 結果發送 LINE
+            if st.button("📤 將 AI 預測結果傳送到 LINE"):
+                msg = f"🔮 【AI 預測】{target_name} ({selected_code})\n🤖 預測：{result_text}\n📈 上漲機率：{round(prob*100, 1)}%\n🎯 模型準確度：{round(acc*100, 1)}%"
+                send_line_message(msg)
+
+            col2.markdown("### 🔍 關鍵影響因子")
+            importance_df = pd.DataFrame({"指標": feature_names, "重要性": importances})
+            importance_df = importance_df.sort_values(by="重要性", ascending=False)
+            col2.dataframe(importance_df, use_container_width=True, hide_index=True)
+            
+        else: st.error("歷史資料不足，無法進行 AI 訓練。")
