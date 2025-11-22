@@ -6,16 +6,17 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 import json
+import feedparser # V10.0 新增：用來抓新聞
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="台股多頭獵人 V9.2", layout="wide")
-st.title("📈 台股多頭獵人 V9.2 - AI 互動修復版")
+st.set_page_config(page_title="台股多頭獵人 V10.0", layout="wide")
+st.title("📈 台股多頭獵人 V10.0 - 新聞戰情室版")
 
 # ==========================================
-# 🔑 LINE 設定區 (請填入您的資料)
+# 🔑 LINE 設定區
 # ==========================================
 LINE_USER_ID = "U2e18c346fe075d2f62986166a4a6ef1c" 
 LINE_CHANNEL_TOKEN = "DNsc+VqdlEliUHVd92ozW59gLdEDJULKIslQOqlTsP6qs5AY3Ydaj8X8l1iShfRHFzWpL++lbb5e4GiDHrioF6JdwmsiA/OHjaB4ZZYGG1TqwUth6hfcbHrHgVscPSZmVGIx4n/ZXYAZhPrvGCKqiwdB04t89/1O/w1cDnyilFU="
@@ -23,21 +24,30 @@ LINE_CHANNEL_TOKEN = "DNsc+VqdlEliUHVd92ozW59gLdEDJULKIslQOqlTsP6qs5AY3Ydaj8X8l1
 # --- LINE 發送函數 ---
 def send_line_message(message_text):
     url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_CHANNEL_TOKEN}"
-    }
-    payload = {
-        "to": LINE_USER_ID,
-        "messages": [{"type": "text", "text": message_text}]
-    }
-    try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        if response.status_code == 200: st.toast("✅ LINE 發送成功！", icon="📲")
-        else: st.error(f"發送失敗：{response.text}")
-    except Exception as e: st.error(f"連線錯誤：{e}")
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {LINE_CHANNEL_TOKEN}"}
+    payload = {"to": LINE_USER_ID, "messages": [{"type": "text", "text": message_text}]}
+    try: requests.post(url, headers=headers, data=json.dumps(payload))
+    except: pass
 
-# --- 0.1 中文名稱對照表 ---
+# --- V10.0 新增：抓取 Google 新聞函數 ---
+def get_stock_news(stock_name):
+    # 使用 Google News RSS 針對台灣區做關鍵字搜尋
+    encoded_name = requests.utils.quote(stock_name)
+    rss_url = f"https://news.google.com/rss/search?q={encoded_name}+stock&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    
+    feed = feedparser.parse(rss_url)
+    news_list = []
+    
+    # 只抓前 5 則最新的
+    for entry in feed.entries[:5]:
+        news_list.append({
+            "title": entry.title,
+            "link": entry.link,
+            "published": entry.published
+        })
+    return news_list
+
+# --- 0.1 中文名稱對照表 (包含熱門 ETF) ---
 STOCK_NAMES = {
     "2330":"台積電", "2317":"鴻海", "2454":"聯發科", "2308":"台達電", "2303":"聯電", 
     "2881":"富邦金", "2882":"國泰金", "2412":"中華電", "1303":"南亞", "2002":"中鋼",
@@ -66,7 +76,10 @@ STOCK_NAMES = {
     "2548":"華固", "2520":"冠德", "2505":"國揚", "1402":"遠東新",
     "6446":"藥華藥", "6472":"保瑞", "1795":"美時", "4105":"東洋", "4114":"健喬", 
     "1760":"中天", "2886":"兆豐金", "2891":"中信金", "2892":"第一金", "2884":"玉山金", 
-    "2880":"華南金", "2357":"華碩", "2301":"光寶科", "2850":"新產", "2451":"創見"
+    "2880":"華南金", "2357":"華碩", "2301":"光寶科", "2850":"新產",
+    # ETF
+    "0050":"元大台灣50", "0056":"元大高股息", "00878":"國泰永續高股息", 
+    "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
 }
 
 # --- 1. 初始化 Session State ---
@@ -74,14 +87,12 @@ if 'watchlist' not in st.session_state:
     st.session_state.watchlist = {
         "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2364": "倫飛",
         "3005": "神基", "2382": "廣達", "3231": "緯創", "2603": "長榮",
-        "3004": "豐達科", "2850": "新產"
+        "3004": "豐達科", "2850": "新產", "0050": "元大台灣50", "0056": "元大高股息"
     }
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
 if 'scan_result_tab4' not in st.session_state: st.session_state.scan_result_tab4 = None
-# V9.2 新增：AI 結果記憶體
 if 'ai_data' not in st.session_state: st.session_state.ai_data = None
-
 if 'sb_selected_code' not in st.session_state:
     st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
 
@@ -98,8 +109,9 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})，請查看儀表板", icon="🎉")
     st.session_state.pending_update = None
 
-# --- 0. 內建熱門產業清單 ---
+# --- 0. 內建熱門產業清單 (加入 ETF 區塊) ---
 SECTOR_DICT = {
+    "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
     "[概念] CoWoS/先進封裝": ["3131", "3583", "6187", "3413", "3680", "2449", "2330", "3711"],
     "[概念] 矽光子/CPO": ["3081", "3450", "3363", "4979", "4908", "6442", "2345"],
@@ -160,7 +172,7 @@ interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
 lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 150)
 
-# --- 核心功能區 ---
+# --- 共用函數 ---
 def get_stock_data(symbol, bars=200, interval="1d"):
     ticker = f"{symbol}.TW"
     stock = yf.Ticker(ticker)
@@ -192,12 +204,21 @@ def get_fundamentals(stock_obj):
     try:
         info = stock_obj.info
         pe_raw = info.get('trailingPE')
-        pe_ratio = round(pe_raw, 2) if pe_raw else "N/A"
+        # ETF 修正：如果沒有 PE，就回傳 None
+        pe_ratio = round(pe_raw, 2) if pe_raw else None 
+        
         div_yield = info.get('dividendYield', 0)
         div_yield_str = f"{round(div_yield*100, 2)}%" if div_yield and div_yield < 1 else f"{round(div_yield, 2)}%" if div_yield else "N/A"
+        
         rev_growth = info.get('revenueGrowth', 0)
         yoy_str = f"{round(rev_growth * 100, 2)}%" if rev_growth else "N/A"
         yoy_c = "normal" if isinstance(rev_growth, float) and rev_growth > 0 else "inverse"
+        
+        # ETF 修正：如果是 ETF (沒有PE)，通常也沒有營收成長，直接設為 N/A
+        if pe_ratio is None:
+            yoy_str = "N/A (ETF/無資料)"
+            yoy_c = "off"
+
         try:
             financials = stock_obj.quarterly_financials
             if 'Total Revenue' in financials.index:
@@ -209,7 +230,7 @@ def get_fundamentals(stock_obj):
             else: qoq_str = "N/A"; qoq_c = "off"
         except: qoq_str = "N/A"; qoq_c = "off"
         return pe_ratio, div_yield_str, yoy_str, qoq_str, yoy_c, qoq_c
-    except: return "N/A", "N/A", "N/A", "N/A", "off", "off"
+    except: return None, "N/A", "N/A", "N/A", "off", "off"
 
 def calculate_valuation_matrix(stock_obj, current_price):
     try:
@@ -297,7 +318,7 @@ def train_and_predict_ai(df):
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測"])
 
 # ==========================================
-# 分頁 1: 個股詳細分析
+# 分頁 1: 個股詳細分析 (V10.0 優化)
 # ==========================================
 with tab1:
     if selected_code:
@@ -309,9 +330,13 @@ with tab1:
             if yf_interval == "1d": df_view.index = df_view.index.strftime('%Y-%m-%d')
             else: df_view.index = df_view.index.strftime('%Y-%m-%d')
             latest = df.iloc[-1]
+            
+            # 取得基本面與估價
             pe, div, yoy, qoq, yoy_c, qoq_c = get_fundamentals(ticker_obj)
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
+            
             st.subheader(f"{stock_name} ({selected_code}) - {timeframe}分析")
+            
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("收盤價", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
             c2.metric("成交量", f"{int(latest['Volume']/1000)} 張", f"{int((latest['Volume']-df.iloc[-2]['Volume'])/1000)} 張")
@@ -321,6 +346,8 @@ with tab1:
             ma_values = [latest['SMA5'], latest['SMA20'], latest['SMA60']]
             ma_spread = (max(ma_values) - min(ma_values)) / min(ma_values) * 100
             c4.metric("均線發散度", f"{round(ma_spread, 2)}%", "越低越好" if ma_spread < 5 else "發散中")
+            
+            # 估價區塊
             if val_matrix:
                 with st.expander("💰 全方位價值估價 (點擊展開)", expanded=True):
                     v_cols = st.columns(3)
@@ -328,22 +355,32 @@ with tab1:
                         v_cols[0].markdown(f"### 📅 殖利率法")
                         v_cols[0].caption(f"基礎：5年平均股利 {val_matrix['yield']['base']} 元")
                         v_cols[0].metric("目前狀態", val_matrix['yield']['status'], help="便宜: >6% / 昂貴: <4%")
+                    
+                    # V10.0 優化：ETF 隱藏本益比
                     if 'pe' in val_matrix:
                         v_cols[1].markdown(f"### 🚀 本益比法 (PE)")
                         v_cols[1].caption(f"基礎：近四季 EPS {val_matrix['pe']['base']} 元")
                         v_cols[1].metric("目前狀態", val_matrix['pe']['status'], help="便宜: <12倍 / 昂貴: >20倍")
+                    else:
+                        v_cols[1].markdown("### 🚀 本益比法")
+                        v_cols[1].info("ETF 或虧損中，無本益比資料")
+
                     if 'pb' in val_matrix:
                         v_cols[2].markdown(f"### 🏭 淨值比法 (PB)")
                         v_cols[2].caption(f"基礎：每股淨值 {val_matrix['pb']['base']} 元")
                         v_cols[2].metric("目前狀態", val_matrix['pb']['status'], help="便宜: <1倍 / 昂貴: >2倍")
             
             if st.button(f"📤 傳送 {stock_name} 診斷到 LINE"):
-                msg = f"\n🔔 【個股診斷】{stock_name} ({selected_code})\n💰 收盤價：{round(latest['Close'], 2)}\n📊 MACD：{'紅柱增強' if hist_val > 0 and hist_val > df.iloc[-2][macd_col] else '動能減弱'}\n📅 殖利率估價：{val_matrix['yield']['status'] if val_matrix else 'N/A'}\n🚀 本益比估價：{val_matrix['pe']['status'] if val_matrix and 'pe' in val_matrix else 'N/A'}\n"
+                msg = f"\n🔔 【個股診斷】{stock_name} ({selected_code})\n💰 收盤價：{round(latest['Close'], 2)}\n📊 MACD：{'紅柱增強' if hist_val > 0 and hist_val > df.iloc[-2][macd_col] else '動能減弱'}\n📅 殖利率估價：{val_matrix['yield']['status'] if val_matrix else 'N/A'}\n"
                 send_line_message(msg)
 
             st.markdown("---")
             f1, f2, f3, f4 = st.columns(4)
-            f1.metric("本益比", pe); f2.metric("殖利率", div); f3.metric("營收 YoY", yoy, delta_color=yoy_c); f4.metric("營收 QoQ", qoq, delta_color=qoq_c)
+            f1.metric("本益比 (PE)", pe if pe else "N/A") # 優化顯示
+            f2.metric("殖利率 (Yield)", div)
+            f3.metric("營收 YoY", yoy, delta_color=yoy_c)
+            f4.metric("營收 QoQ", qoq, delta_color=qoq_c)
+            
             fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.5, 0.2, 0.15, 0.15], subplot_titles=("K線 & 布林通道", "成交量", "MACD", "KD"))
             fig.add_trace(go.Candlestick(x=df_view.index, open=df_view['Open'], high=df_view['High'], low=df_view['Low'], close=df_view['Close'], name='K線'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_view.index, y=df_view['SMA20'], line=dict(color='orange', width=1), name='月線'), row=1, col=1)
@@ -365,10 +402,25 @@ with tab1:
             fig.update_xaxes(type='category', dtick=10 if yf_interval=="1d" else 5) 
             fig.update_layout(height=900, showlegend=True, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
+            
+            # --- V10.0 新增：Google 新聞區塊 ---
+            st.subheader(f"📰 {stock_name} 最新相關新聞")
+            try:
+                news_items = get_stock_news(stock_name)
+                if news_items:
+                    for news in news_items:
+                        st.markdown(f"- [{news['title']}]({news['link']}) <span style='color:gray; font-size:0.8em'>({news['published']})</span>", unsafe_allow_html=True)
+                else:
+                    st.info("暫無相關新聞")
+            except:
+                st.warning("新聞載入失敗，請稍後再試。")
 
 # ==========================================
-# 分頁 2: 觀察名單掃描器
+# 分頁 2 ~ 6 (保持不變，省略重複代碼)
 # ==========================================
+# ... (為確保完整性，請繼續保留之前的 Tab 2,3,4,5,6 程式碼，與 V9.1 相同) ...
+# (以下為 Tab 2~6 的完整內容，請直接複製)
+
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
     st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
@@ -538,7 +590,6 @@ with tab5:
             st.plotly_chart(fig, use_container_width=True)
         else: st.error("無法取得歷史數據。")
 
-# --- V9.2 AI 修復版：使用 Session State 記憶結果 ---
 with tab6:
     st.subheader("🔮 AI 趨勢預測 (Random Forest)")
     st.markdown("""
@@ -546,47 +597,30 @@ with tab6:
     * 🎯 **準確度 (Accuracy)：** 代表模型在過去測試資料中的預測正確率。
     * 📈 **上漲機率：** AI 認為明天會收紅的信心程度。
     """)
-    
-    # 1. 按鈕觸發運算，並存入 State
     if st.button("🧠 啟動 AI 模型運算"):
         target_name = st.session_state.watchlist.get(selected_code, selected_code)
         df_ai, _ = get_stock_data(selected_code, 0, interval="1d")
         t_ai = yf.Ticker(f"{selected_code}.TW")
         df_ai = t_ai.history(period="max")
-        
         if len(df_ai) > 200:
             df_ai = calculate_indicators(df_ai)
             with st.spinner(f"AI 正在學習 {target_name} 的歷史股性..."):
                 acc, pred, prob, importances, feature_names = train_and_predict_ai(df_ai)
-                
-            # 存入記憶體
-            st.session_state.ai_data = {
-                "target_name": target_name, "code": selected_code,
-                "acc": acc, "pred": pred, "prob": prob,
-                "importances": importances, "feature_names": feature_names
-            }
-        else:
-            st.error("歷史資料不足，無法進行 AI 訓練。")
+            st.session_state.ai_data = {"target_name": target_name, "code": selected_code, "acc": acc, "pred": pred, "prob": prob, "importances": importances, "feature_names": feature_names}
+        else: st.error("歷史資料不足，無法進行 AI 訓練。")
 
-    # 2. 從 State 讀取結果並顯示 (這樣就算按了 LINE 按鈕刷新頁面，結果也不會消失)
     if st.session_state.ai_data:
         ai = st.session_state.ai_data
-        
         col1, col2 = st.columns(2)
         result_text = "📈 看漲 (Bullish)" if ai['pred'] == 1 else "📉 看跌 (Bearish)"
         result_color = "green" if ai['pred'] == 0 else "red"
-        
         col1.markdown(f"### AI 預測明日 ({ai['target_name']})： :{result_color}[{result_text}]")
         col1.metric("上漲機率", f"{round(ai['prob'] * 100, 1)}%")
         col1.metric("模型回測準確度", f"{round(ai['acc'] * 100, 1)}%")
-        
         if ai['acc'] < 0.5: col1.warning("⚠️ 模型準確度低於 50%，參考價值較低。")
-        
-        # V9.2: 這裡的按鈕現在安全了，因為資料是從 State 讀取的
         if st.button("📤 將 AI 預測結果傳送到 LINE"):
             msg = f"🔮 【AI 預測】{ai['target_name']} ({ai['code']})\n🤖 預測：{result_text}\n📈 上漲機率：{round(ai['prob']*100, 1)}%\n🎯 模型準確度：{round(ai['acc']*100, 1)}%"
             send_line_message(msg)
-
         col2.markdown("### 🔍 關鍵影響因子")
         importance_df = pd.DataFrame({"指標": ai['feature_names'], "重要性": ai['importances']})
         importance_df = importance_df.sort_values(by="重要性", ascending=False)
