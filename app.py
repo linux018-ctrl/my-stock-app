@@ -11,8 +11,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="台股多頭獵人 V9.1", layout="wide")
-st.title("📈 台股多頭獵人 V9.1 - 全功能終極版")
+st.set_page_config(page_title="台股多頭獵人 V9.2", layout="wide")
+st.title("📈 台股多頭獵人 V9.2 - AI 互動修復版")
 
 # ==========================================
 # 🔑 LINE 設定區 (請填入您的資料)
@@ -66,7 +66,7 @@ STOCK_NAMES = {
     "2548":"華固", "2520":"冠德", "2505":"國揚", "1402":"遠東新",
     "6446":"藥華藥", "6472":"保瑞", "1795":"美時", "4105":"東洋", "4114":"健喬", 
     "1760":"中天", "2886":"兆豐金", "2891":"中信金", "2892":"第一金", "2884":"玉山金", 
-    "2880":"華南金", "2357":"華碩", "2301":"光寶科", "2850":"新產"
+    "2880":"華南金", "2357":"華碩", "2301":"光寶科", "2850":"新產", "2451":"創見"
 }
 
 # --- 1. 初始化 Session State ---
@@ -79,6 +79,9 @@ if 'watchlist' not in st.session_state:
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
 if 'scan_result_tab4' not in st.session_state: st.session_state.scan_result_tab4 = None
+# V9.2 新增：AI 結果記憶體
+if 'ai_data' not in st.session_state: st.session_state.ai_data = None
+
 if 'sb_selected_code' not in st.session_state:
     st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
 
@@ -182,7 +185,6 @@ def calculate_indicators(df):
     df = pd.concat([df, k_d], axis=1)
     bb = ta.bbands(df['Close'], length=20, std=2)
     df = pd.concat([df, bb], axis=1)
-    # V8.0 補回: RSI
     df['RSI'] = ta.rsi(df['Close'], length=14)
     return df
 
@@ -272,7 +274,6 @@ def run_backtest(df, strategy, initial_capital=1000000):
         equity_curve.append({"Date": date, "Equity": cash + (position * price)})
     return pd.DataFrame(equity_curve), pd.DataFrame(trade_log), int(cash + (position * price))
 
-# --- V8.0 補回: AI 預測邏輯 ---
 def train_and_predict_ai(df):
     data = df.copy()
     data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
@@ -336,7 +337,6 @@ with tab1:
                         v_cols[2].caption(f"基礎：每股淨值 {val_matrix['pb']['base']} 元")
                         v_cols[2].metric("目前狀態", val_matrix['pb']['status'], help="便宜: <1倍 / 昂貴: >2倍")
             
-            # V9.0: 個股 LINE 發送
             if st.button(f"📤 傳送 {stock_name} 診斷到 LINE"):
                 msg = f"\n🔔 【個股診斷】{stock_name} ({selected_code})\n💰 收盤價：{round(latest['Close'], 2)}\n📊 MACD：{'紅柱增強' if hist_val > 0 and hist_val > df.iloc[-2][macd_col] else '動能減弱'}\n📅 殖利率估價：{val_matrix['yield']['status'] if val_matrix else 'N/A'}\n🚀 本益比估價：{val_matrix['pe']['status'] if val_matrix and 'pe' in val_matrix else 'N/A'}\n"
                 send_line_message(msg)
@@ -400,7 +400,6 @@ with tab2:
 
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
-        # V9.0: 掃描結果 LINE 發送
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
             msg = "🤖 【觀察名單掃描報告】\n"
             for index, row in res_df.iterrows():
@@ -458,7 +457,6 @@ with tab3:
     if st.session_state.scan_result_tab3 is not None and not st.session_state.scan_result_tab3.empty:
         rev_df = st.session_state.scan_result_tab3
         st.success(f"發現 {len(rev_df)} 檔潛在轉折股！")
-        # V9.0: 轉折獵人 LINE 發送
         if st.button("📤 將轉折清單傳送到 LINE (Tab3)"):
             msg = f"🔥 【轉折獵人】發現 {len(rev_df)} 檔潛力股\n板塊：{target_sector}\n"
             for index, row in rev_df.iterrows():
@@ -540,7 +538,7 @@ with tab5:
             st.plotly_chart(fig, use_container_width=True)
         else: st.error("無法取得歷史數據。")
 
-# --- V8.0 補回: AI 趨勢預測 (Tab 6) ---
+# --- V9.2 AI 修復版：使用 Session State 記憶結果 ---
 with tab6:
     st.subheader("🔮 AI 趨勢預測 (Random Forest)")
     st.markdown("""
@@ -549,41 +547,47 @@ with tab6:
     * 📈 **上漲機率：** AI 認為明天會收紅的信心程度。
     """)
     
+    # 1. 按鈕觸發運算，並存入 State
     if st.button("🧠 啟動 AI 模型運算"):
         target_name = st.session_state.watchlist.get(selected_code, selected_code)
-        
-        # 1. 抓取足夠長的資料來訓練 (至少 5 年)
         df_ai, _ = get_stock_data(selected_code, 0, interval="1d")
         t_ai = yf.Ticker(f"{selected_code}.TW")
         df_ai = t_ai.history(period="max")
         
         if len(df_ai) > 200:
-            # 2. 計算指標
             df_ai = calculate_indicators(df_ai)
-            
             with st.spinner(f"AI 正在學習 {target_name} 的歷史股性..."):
-                # 3. 訓練與預測
                 acc, pred, prob, importances, feature_names = train_and_predict_ai(df_ai)
-            
-            # 4. 顯示結果
-            col1, col2 = st.columns(2)
-            result_text = "📈 看漲 (Bullish)" if pred == 1 else "📉 看跌 (Bearish)"
-            result_color = "green" if pred == 0 else "red"
-            
-            col1.markdown(f"### AI 預測明日： :{result_color}[{result_text}]")
-            col1.metric("上漲機率", f"{round(prob * 100, 1)}%")
-            col1.metric("模型回測準確度", f"{round(acc * 100, 1)}%")
-            
-            if acc < 0.5: col1.warning("⚠️ 模型準確度低於 50%，參考價值較低。")
-            
-            # V9.0: AI 結果發送 LINE
-            if st.button("📤 將 AI 預測結果傳送到 LINE"):
-                msg = f"🔮 【AI 預測】{target_name} ({selected_code})\n🤖 預測：{result_text}\n📈 上漲機率：{round(prob*100, 1)}%\n🎯 模型準確度：{round(acc*100, 1)}%"
-                send_line_message(msg)
+                
+            # 存入記憶體
+            st.session_state.ai_data = {
+                "target_name": target_name, "code": selected_code,
+                "acc": acc, "pred": pred, "prob": prob,
+                "importances": importances, "feature_names": feature_names
+            }
+        else:
+            st.error("歷史資料不足，無法進行 AI 訓練。")
 
-            col2.markdown("### 🔍 關鍵影響因子")
-            importance_df = pd.DataFrame({"指標": feature_names, "重要性": importances})
-            importance_df = importance_df.sort_values(by="重要性", ascending=False)
-            col2.dataframe(importance_df, use_container_width=True, hide_index=True)
-            
-        else: st.error("歷史資料不足，無法進行 AI 訓練。")
+    # 2. 從 State 讀取結果並顯示 (這樣就算按了 LINE 按鈕刷新頁面，結果也不會消失)
+    if st.session_state.ai_data:
+        ai = st.session_state.ai_data
+        
+        col1, col2 = st.columns(2)
+        result_text = "📈 看漲 (Bullish)" if ai['pred'] == 1 else "📉 看跌 (Bearish)"
+        result_color = "green" if ai['pred'] == 0 else "red"
+        
+        col1.markdown(f"### AI 預測明日 ({ai['target_name']})： :{result_color}[{result_text}]")
+        col1.metric("上漲機率", f"{round(ai['prob'] * 100, 1)}%")
+        col1.metric("模型回測準確度", f"{round(ai['acc'] * 100, 1)}%")
+        
+        if ai['acc'] < 0.5: col1.warning("⚠️ 模型準確度低於 50%，參考價值較低。")
+        
+        # V9.2: 這裡的按鈕現在安全了，因為資料是從 State 讀取的
+        if st.button("📤 將 AI 預測結果傳送到 LINE"):
+            msg = f"🔮 【AI 預測】{ai['target_name']} ({ai['code']})\n🤖 預測：{result_text}\n📈 上漲機率：{round(ai['prob']*100, 1)}%\n🎯 模型準確度：{round(ai['acc']*100, 1)}%"
+            send_line_message(msg)
+
+        col2.markdown("### 🔍 關鍵影響因子")
+        importance_df = pd.DataFrame({"指標": ai['feature_names'], "重要性": ai['importances']})
+        importance_df = importance_df.sort_values(by="重要性", ascending=False)
+        col2.dataframe(importance_df, use_container_width=True, hide_index=True)
