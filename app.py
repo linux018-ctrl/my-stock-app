@@ -6,16 +6,47 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 import json
+import os # V14.0 新增：用於處理檔案路徑
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V13.1", layout="wide")
-st.title("📈 艾倫杭特 V13.1 - 策略戰報詳解版")
+st.set_page_config(page_title="艾倫杭特 V14.0", layout="wide")
+st.title("📈 艾倫杭特 V14.0 - 永續記憶版")
 
 # ==========================================
-# 🔑 LINE 設定區 (請填入您的資料)
+# 💾 V14.0 核心：資料庫存取函數
+# ==========================================
+WATCHLIST_FILE = 'watchlist.json'
+
+# 預設清單 (當找不到存檔時使用)
+DEFAULT_WATCHLIST = {
+    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2364": "倫飛",
+    "3005": "神基", "2382": "廣達", "3231": "緯創", "2603": "長榮",
+    "3004": "豐達科", "2850": "新產"
+}
+
+def load_watchlist():
+    """從 JSON 檔案讀取觀察名單，如果不存在則回傳預設值"""
+    if os.path.exists(WATCHLIST_FILE):
+        try:
+            with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return DEFAULT_WATCHLIST.copy()
+    return DEFAULT_WATCHLIST.copy()
+
+def save_watchlist(data):
+    """將觀察名單寫入 JSON 檔案"""
+    try:
+        with open(WATCHLIST_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        st.error(f"存檔失敗：{e}")
+
+# ==========================================
+# 🔑 LINE 設定區
 # ==========================================
 LINE_USER_ID = "U2e18c346fe075d2f62986166a4a6ef1c" 
 LINE_CHANNEL_TOKEN = "DNsc+VqdlEliUHVd92ozW59gLdEDJULKIslQOqlTsP6qs5AY3Ydaj8X8l1iShfRHFzWpL++lbb5e4GiDHrioF6JdwmsiA/OHjaB4ZZYGG1TqwUth6hfcbHrHgVscPSZmVGIx4n/ZXYAZhPrvGCKqiwdB04t89/1O/w1cDnyilFU="
@@ -65,37 +96,33 @@ STOCK_NAMES = {
     "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
 }
 
-# --- V13.1 新增：策略邏輯說明字典 ---
-STRATEGY_DESC = {
-    "均線黃金交叉 (5MA穿過20MA)": "📈 **趨勢順勢策略**：當短期成本(5日)超過長期成本(20日)時追價買進。適合波段明顯的股票。",
-    "KD 低檔金叉 (K<30買, K>80賣)": "📉 **震盪操作策略**：在超賣區(K<30)買進，超買區(K>80)賣出。適合箱型整理的股票。",
-    "布林通道逆勢 (跌破下軌買/突破上軌賣)": "🛡️ **逆勢回歸策略**：當股價偏離標準差過大(跌破下軌)時接刀。適合抓反彈。",
-    "多因子狙擊 (KD+布林+MACD+均線)": "🎯 **高勝率濾網策略**：同時滿足低檔、超跌、動能轉強等多重條件才出手。交易次數少但精準。"
-}
-
-# --- 1. 初始化 Session State ---
+# --- 1. 初始化 Session State (V14.0 改為從檔案讀取) ---
 if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = {
-        "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2364": "倫飛",
-        "3005": "神基", "2382": "廣達", "3231": "緯創", "2603": "長榮",
-        "3004": "豐達科", "2850": "新產"
-    }
+    st.session_state.watchlist = load_watchlist() # 優先讀取檔案
+
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
 if 'scan_result_tab4' not in st.session_state: st.session_state.scan_result_tab4 = None
 if 'ai_data' not in st.session_state: st.session_state.ai_data = None
 if 'sb_selected_code' not in st.session_state:
-    st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
+    # 確保預設值存在於清單中
+    if st.session_state.watchlist:
+        st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
+    else:
+        st.session_state.sb_selected_code = "2330" # 防呆
 
 # ==========================================
-# 🛠️ 狀態管理中樞
+# 🛠️ 狀態管理中樞 (包含自動存檔邏輯)
 # ==========================================
 if 'pending_update' in st.session_state and st.session_state.pending_update:
     update_data = st.session_state.pending_update
     new_code = update_data['code']
     new_name = update_data['name']
+    
     if new_code not in st.session_state.watchlist:
         st.session_state.watchlist[new_code] = new_name
+        save_watchlist(st.session_state.watchlist) # V14.0: 有更動就存檔
+    
     st.session_state.sb_selected_code = new_code
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})，請查看儀表板", icon="🎉")
     st.session_state.pending_update = None
@@ -127,7 +154,7 @@ SECTOR_DICT = {
     "你的觀察名單": [] 
 }
 
-# --- 側邊欄 ---
+# --- 側邊欄：名單管理 ---
 st.sidebar.header("📝 觀察名單管理")
 with st.sidebar.expander("新增/移除個股"):
     def auto_fill_name():
@@ -143,16 +170,22 @@ with st.sidebar.expander("新增/移除個股"):
     c1, c2 = st.columns(2)
     new_code = c1.text_input("代號", placeholder="2395", key="input_code", on_change=auto_fill_name)
     new_name = c2.text_input("名稱", placeholder="自動帶入...", key="input_name")
+    
     if st.button("➕ 新增"):
         if new_code and new_name:
             st.session_state.watchlist[new_code] = new_name
+            save_watchlist(st.session_state.watchlist) # V14.0: 存檔
+            st.success(f"已新增 {new_name} ({new_code})")
             st.rerun()
+
     remove_target = st.selectbox("移除股票", options=list(st.session_state.watchlist.keys()), format_func=lambda x: f"{x} {st.session_state.watchlist[x]}")
     if st.button("➖ 移除"):
         if remove_target in st.session_state.watchlist:
             del st.session_state.watchlist[remove_target]
+            save_watchlist(st.session_state.watchlist) # V14.0: 存檔
             if remove_target == st.session_state.sb_selected_code:
-                st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
+                if st.session_state.watchlist:
+                    st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
             st.rerun()
 
 st.sidebar.markdown("---")
@@ -297,19 +330,11 @@ def run_backtest(df, strategy, initial_capital=1000000, bb_threshold=0.05):
             if shares_to_buy > 0:
                 cost = shares_to_buy * price * 1.001425; cash -= cost; position = shares_to_buy
                 entry_cost = cost
-                trade_log.append({
-                    "日期": date.strftime('%Y-%m-%d'), 
-                    "動作": "買進", "價格": round(price, 2), "股數": shares_to_buy, 
-                    "損益": None, "報酬率(%)": None, "資產": int(cash + position * price)
-                })
+                trade_log.append({"日期": date.strftime('%Y-%m-%d'), "動作": "買進", "價格": round(price, 2), "股數": shares_to_buy, "損益": None, "報酬率(%)": None, "資產": int(cash + position * price)})
         elif action == "SELL":
             revenue = position * price * (1 - 0.001425 - 0.003); cash += revenue
             pnl = revenue - entry_cost; roi = (pnl / entry_cost) * 100 if entry_cost > 0 else 0
-            trade_log.append({
-                "日期": date.strftime('%Y-%m-%d'), 
-                "動作": "賣出", "價格": round(price, 2), "股數": position, 
-                "損益": int(pnl), "報酬率(%)": round(roi, 2), "資產": int(cash)
-            })
+            trade_log.append({"日期": date.strftime('%Y-%m-%d'), "動作": "賣出", "價格": round(price, 2), "股數": position, "損益": int(pnl), "報酬率(%)": round(roi, 2), "資產": int(cash)})
             position = 0; entry_cost = 0
         equity_curve.append({"Date": date, "Equity": cash + (position * price)})
     return pd.DataFrame(equity_curve), pd.DataFrame(trade_log), int(cash + (position * price))
@@ -336,13 +361,7 @@ def train_and_predict_ai(df):
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測"])
 
-# 分頁 1~4 略 (保持原樣，請自行保留)
-# 為了方便您，這裡省略 Tab 1-4 的詳細代碼，請務必從 V10.0/V12.0 複製過來！
-# 下面只貼修改後的 Tab 5，其他請維持原樣！
-
-# ==========================================
-# 分頁 1 (請保持 V12.0 內容)
-# ==========================================
+# 分頁 1: 個股詳細分析
 with tab1:
     if selected_code:
         stock_name = st.session_state.watchlist.get(selected_code, selected_code)
@@ -561,31 +580,26 @@ with tab4:
                 st.rerun()
     elif st.session_state.scan_result_tab4 is not None: st.info("可惜，沒有發現三率三升的股票。")
 
-# ==========================================
-# 分頁 5: 策略回測實驗室 (V13.1 優化版)
-# ==========================================
+# 分頁 5: 策略回測
 with tab5:
     st.subheader("🧪 策略回測實驗室 - 驗證你的交易策略")
-    st.info("使用歷史數據來模擬交易，看看如果過去幾年使用這個策略，績效會如何？")
+    STRATEGY_DESC = {
+        "均線黃金交叉 (5MA穿過20MA)": "📈 **趨勢順勢策略**：當短期成本(5日)超過長期成本(20日)時追價買進。適合波段明顯的股票。",
+        "KD 低檔金叉 (K<30買, K>80賣)": "📉 **震盪操作策略**：在超賣區(K<30)買進，超買區(K>80)賣出。適合箱型整理的股票。",
+        "布林通道逆勢 (跌破下軌買/突破上軌賣)": "🛡️ **逆勢回歸策略**：當股價偏離標準差過大(跌破下軌)時接刀。適合抓反彈。",
+        "多因子狙擊 (KD+布林+MACD+均線)": "🎯 **高勝率濾網策略**：同時滿足低檔、超跌、動能轉強等多重條件才出手。交易次數少但精準。"
+    }
+    
     col1, col2, col3 = st.columns(3)
-    
-    bt_strategy = col1.selectbox("選擇回測策略", [
-        "均線黃金交叉 (5MA穿過20MA)", 
-        "KD 低檔金叉 (K<30買, K>80賣)",
-        "布林通道逆勢 (跌破下軌買/突破上軌賣)",
-        "多因子狙擊 (KD+布林+MACD+均線)"
-    ])
-    
+    bt_strategy = col1.selectbox("選擇回測策略", list(STRATEGY_DESC.keys()))
     bt_period = col2.selectbox("回測時間長度", ["1年 (短線)", "3年 (中線)", "5年 (長線)"])
     period_map = {"1年 (短線)": "1y", "3年 (中線)": "3y", "5年 (長線)": "5y"}
-    
     bb_thresh = 0.05
     if "布林" in bt_strategy or "狙擊" in bt_strategy:
         bb_thresh = col3.slider("布林乖離門檻", 0.01, 0.10, 0.05, 0.01, format="%.2f")
     
     c_act1, c_act2 = st.columns([1, 2])
     
-    # --- 單一策略回測 ---
     if c_act1.button("▶️ 開始回測 (單一策略)"):
         target_name = st.session_state.watchlist.get(selected_code, selected_code)
         st.write(f"正在回測：**{target_name} ({selected_code})** | 策略：{bt_strategy}...")
@@ -598,21 +612,12 @@ with tab5:
             r1, r2, r3 = st.columns(3)
             r1.metric("最終資產", f"${final_asset:,}", f"{round(total_return, 2)}%")
             r2.metric("總交易次數", len(trade_df))
-            
             if not trade_df.empty:
                 def highlight_trade(row):
                     if row['動作'] == '買進': return ['background-color: rgba(144, 238, 144, 0.3)'] * len(row)
                     elif row['動作'] == '賣出': return ['background-color: rgba(255, 99, 71, 0.3)'] * len(row)
                     return [''] * len(row)
-
-                st.dataframe(
-                    trade_df.style.apply(highlight_trade, axis=1), 
-                    use_container_width=True,
-                    column_config={
-                        "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"),
-                        "損益": st.column_config.NumberColumn(format="$%d")
-                    }
-                )
+                st.dataframe(trade_df.style.apply(highlight_trade, axis=1), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"), "損益": st.column_config.NumberColumn(format="$%d")})
             else: st.warning("此期間內無符合策略的交易訊號。")
             st.subheader("📈 資產累積曲線")
             fig = go.Figure()
@@ -621,80 +626,41 @@ with tab5:
             st.plotly_chart(fig, use_container_width=True)
         else: st.error("無法取得歷史數據。")
 
-    # --- 策略大亂鬥 (V13.1 優化版) ---
     if c_act2.button("🏆 策略大亂鬥 (一鍵比較所有策略)"):
         target_name = st.session_state.watchlist.get(selected_code, selected_code)
         st.write(f"🔥 正在進行策略 PK：**{target_name} ({selected_code})** ...")
         t = yf.Ticker(f"{selected_code}.TW")
         df_bt = t.history(period=period_map[bt_period])
-        
         if not df_bt.empty:
             df_bt = calculate_indicators(df_bt)
-            strategies_to_test = [
-                "均線黃金交叉 (5MA穿過20MA)", 
-                "KD 低檔金叉 (K<30買, K>80賣)",
-                "布林通道逆勢 (跌破下軌買/突破上軌賣)",
-                "多因子狙擊 (KD+布林+MACD+均線)"
-            ]
             pk_results = []
-            all_trade_logs = {} # 儲存所有策略的交易紀錄
-
-            for strat in strategies_to_test:
+            all_trade_logs = {}
+            for strat in STRATEGY_DESC.keys():
                 _, trade_df, final_val = run_backtest(df_bt, strat, bb_threshold=0.05)
                 roi = ((final_val - 1000000) / 1000000) * 100
-                pk_results.append({
-                    "策略名稱": strat,
-                    "最終資產": f"${final_val:,}",
-                    "報酬率(%)": round(roi, 2),
-                    "交易次數": len(trade_df)
-                })
-                all_trade_logs[strat] = trade_df # 存起來
-
+                pk_results.append({"策略名稱": strat, "最終資產": f"${final_val:,}", "報酬率(%)": round(roi, 2), "交易次數": len(trade_df)})
+                all_trade_logs[strat] = trade_df
             pk_df = pd.DataFrame(pk_results).sort_values(by="報酬率(%)", ascending=False)
             winner = pk_df.iloc[0]
             st.success(f"🏆 獲勝策略：**{winner['策略名稱']}** (報酬率 {winner['報酬率(%)']}%)")
-            
-            # 顯示大亂鬥總表 (優化格式)
-            st.dataframe(
-                pk_df.style.applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['報酬率(%)']),
-                use_container_width=True,
-                column_config={
-                    "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%")
-                }
-            )
-
-            # V13.1 新增：策略詳解與交易明細展開
+            st.dataframe(pk_df.style.applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['報酬率(%)']), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%")})
             st.markdown("### 📝 策略邏輯與詳細交易紀錄")
             for index, row in pk_df.iterrows():
                 strat_name = row['策略名稱']
                 rank_icon = "🥇" if index == 0 else "🥈" if index == 1 else "🥉" if index == 2 else "🔹"
-                
                 with st.expander(f"{rank_icon} {strat_name} (點擊查看明細)"):
-                    # 1. 顯示策略解釋
-                    st.info(STRATEGY_DESC.get(strat_name, "無說明"))
-                    
-                    # 2. 顯示交易明細表格
+                    st.info(STRATEGY_DESC.get(strat_name))
                     t_log = all_trade_logs[strat_name]
                     if not t_log.empty:
                         def highlight_trade(row):
                             if row['動作'] == '買進': return ['background-color: rgba(144, 238, 144, 0.3)'] * len(row)
                             elif row['動作'] == '賣出': return ['background-color: rgba(255, 99, 71, 0.3)'] * len(row)
                             return [''] * len(row)
-
-                        st.dataframe(
-                            t_log.style.apply(highlight_trade, axis=1),
-                            use_container_width=True,
-                            column_config={
-                                "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"),
-                                "損益": st.column_config.NumberColumn(format="$%d")
-                            }
-                        )
-                    else:
-                        st.caption("此策略在測試期間內無交易訊號。")
-
+                        st.dataframe(t_log.style.apply(highlight_trade, axis=1), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"), "損益": st.column_config.NumberColumn(format="$%d")})
+                    else: st.caption("此策略在測試期間內無交易訊號。")
         else: st.error("無法取得歷史數據。")
 
-# --- Tab 6 AI 預測 (保持不變) ---
+# 分頁 6: AI 預測
 with tab6:
     st.subheader("🔮 AI 趨勢預測 (Random Forest)")
     st.markdown("""**原理：** 利用機器學習模型，分析過去的 **收盤價、成交量、RSI、MACD** 與隔日漲跌的關係，預測明日走勢。""")
