@@ -6,17 +6,16 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 import json
-import feedparser # V10.0 新增：用來抓新聞
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V10.0", layout="wide")
-st.title("📈 艾倫杭特 V10.0 - 新聞戰情室版")
+st.set_page_config(page_title="艾倫杭特 V13.1", layout="wide")
+st.title("📈 艾倫杭特 V13.1 - 策略戰報詳解版")
 
 # ==========================================
-# 🔑 LINE 設定區
+# 🔑 LINE 設定區 (請填入您的資料)
 # ==========================================
 LINE_USER_ID = "U2e18c346fe075d2f62986166a4a6ef1c" 
 LINE_CHANNEL_TOKEN = "DNsc+VqdlEliUHVd92ozW59gLdEDJULKIslQOqlTsP6qs5AY3Ydaj8X8l1iShfRHFzWpL++lbb5e4GiDHrioF6JdwmsiA/OHjaB4ZZYGG1TqwUth6hfcbHrHgVscPSZmVGIx4n/ZXYAZhPrvGCKqiwdB04t89/1O/w1cDnyilFU="
@@ -26,28 +25,13 @@ def send_line_message(message_text):
     url = "https://api.line.me/v2/bot/message/push"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {LINE_CHANNEL_TOKEN}"}
     payload = {"to": LINE_USER_ID, "messages": [{"type": "text", "text": message_text}]}
-    try: requests.post(url, headers=headers, data=json.dumps(payload))
-    except: pass
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        if response.status_code == 200: st.toast("✅ LINE 發送成功！", icon="📲")
+        else: st.error(f"發送失敗：{response.text}")
+    except Exception as e: st.error(f"連線錯誤：{e}")
 
-# --- V10.0 新增：抓取 Google 新聞函數 ---
-def get_stock_news(stock_name):
-    # 使用 Google News RSS 針對台灣區做關鍵字搜尋
-    encoded_name = requests.utils.quote(stock_name)
-    rss_url = f"https://news.google.com/rss/search?q={encoded_name}+stock&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-    
-    feed = feedparser.parse(rss_url)
-    news_list = []
-    
-    # 只抓前 5 則最新的
-    for entry in feed.entries[:5]:
-        news_list.append({
-            "title": entry.title,
-            "link": entry.link,
-            "published": entry.published
-        })
-    return news_list
-
-# --- 0.1 中文名稱對照表 (包含熱門 ETF) ---
+# --- 0.1 中文名稱對照表 ---
 STOCK_NAMES = {
     "2330":"台積電", "2317":"鴻海", "2454":"聯發科", "2308":"台達電", "2303":"聯電", 
     "2881":"富邦金", "2882":"國泰金", "2412":"中華電", "1303":"南亞", "2002":"中鋼",
@@ -76,10 +60,17 @@ STOCK_NAMES = {
     "2548":"華固", "2520":"冠德", "2505":"國揚", "1402":"遠東新",
     "6446":"藥華藥", "6472":"保瑞", "1795":"美時", "4105":"東洋", "4114":"健喬", 
     "1760":"中天", "2886":"兆豐金", "2891":"中信金", "2892":"第一金", "2884":"玉山金", 
-    "2880":"華南金", "2357":"華碩", "2301":"光寶科", "2850":"新產",
-    # ETF
+    "2880":"華南金", "2357":"華碩", "2301":"光寶科", "2850":"新產", "2451":"創見",
     "0050":"元大台灣50", "0056":"元大高股息", "00878":"國泰永續高股息", 
     "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
+}
+
+# --- V13.1 新增：策略邏輯說明字典 ---
+STRATEGY_DESC = {
+    "均線黃金交叉 (5MA穿過20MA)": "📈 **趨勢順勢策略**：當短期成本(5日)超過長期成本(20日)時追價買進。適合波段明顯的股票。",
+    "KD 低檔金叉 (K<30買, K>80賣)": "📉 **震盪操作策略**：在超賣區(K<30)買進，超買區(K>80)賣出。適合箱型整理的股票。",
+    "布林通道逆勢 (跌破下軌買/突破上軌賣)": "🛡️ **逆勢回歸策略**：當股價偏離標準差過大(跌破下軌)時接刀。適合抓反彈。",
+    "多因子狙擊 (KD+布林+MACD+均線)": "🎯 **高勝率濾網策略**：同時滿足低檔、超跌、動能轉強等多重條件才出手。交易次數少但精準。"
 }
 
 # --- 1. 初始化 Session State ---
@@ -87,7 +78,7 @@ if 'watchlist' not in st.session_state:
     st.session_state.watchlist = {
         "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2364": "倫飛",
         "3005": "神基", "2382": "廣達", "3231": "緯創", "2603": "長榮",
-        "3004": "豐達科", "2850": "新產", "0050": "元大台灣50", "0056": "元大高股息"
+        "3004": "豐達科", "2850": "新產"
     }
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
@@ -109,7 +100,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})，請查看儀表板", icon="🎉")
     st.session_state.pending_update = None
 
-# --- 0. 內建熱門產業清單 (加入 ETF 區塊) ---
+# --- 0. 內建熱門產業清單 ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -172,7 +163,7 @@ interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
 lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 150)
 
-# --- 共用函數 ---
+# --- 核心功能區 ---
 def get_stock_data(symbol, bars=200, interval="1d"):
     ticker = f"{symbol}.TW"
     stock = yf.Ticker(ticker)
@@ -186,8 +177,19 @@ def get_stock_data(symbol, bars=200, interval="1d"):
         df = stock.history(period=period_str, interval=interval)
     return df, stock
 
+def get_stock_news(stock_name):
+    encoded_name = requests.utils.quote(stock_name)
+    rss_url = f"https://news.google.com/rss/search?q={encoded_name}+stock&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    try:
+        import feedparser
+        feed = feedparser.parse(rss_url)
+        news_list = [{"title": entry.title, "link": entry.link, "published": entry.published} for entry in feed.entries[:5]]
+        return news_list
+    except: return []
+
 def calculate_indicators(df):
     df['SMA5'] = ta.sma(df['Close'], length=5)
+    df['SMA10'] = ta.sma(df['Close'], length=10)
     df['SMA20'] = ta.sma(df['Close'], length=20)
     df['SMA60'] = ta.sma(df['Close'], length=60)
     df['Vol_SMA5'] = ta.sma(df['Volume'], length=5)
@@ -204,21 +206,12 @@ def get_fundamentals(stock_obj):
     try:
         info = stock_obj.info
         pe_raw = info.get('trailingPE')
-        # ETF 修正：如果沒有 PE，就回傳 None
-        pe_ratio = round(pe_raw, 2) if pe_raw else None 
-        
+        pe_ratio = round(pe_raw, 2) if pe_raw else None
         div_yield = info.get('dividendYield', 0)
         div_yield_str = f"{round(div_yield*100, 2)}%" if div_yield and div_yield < 1 else f"{round(div_yield, 2)}%" if div_yield else "N/A"
-        
         rev_growth = info.get('revenueGrowth', 0)
         yoy_str = f"{round(rev_growth * 100, 2)}%" if rev_growth else "N/A"
         yoy_c = "normal" if isinstance(rev_growth, float) and rev_growth > 0 else "inverse"
-        
-        # ETF 修正：如果是 ETF (沒有PE)，通常也沒有營收成長，直接設為 N/A
-        if pe_ratio is None:
-            yoy_str = "N/A (ETF/無資料)"
-            yoy_c = "off"
-
         try:
             financials = stock_obj.quarterly_financials
             if 'Total Revenue' in financials.index:
@@ -270,11 +263,14 @@ def check_three_rates(stock_obj):
         except: return False, {}
     except: return False, {}
 
-def run_backtest(df, strategy, initial_capital=1000000):
+def run_backtest(df, strategy, initial_capital=1000000, bb_threshold=0.05):
     cash = initial_capital; position = 0; equity_curve = []; trade_log = []
+    entry_cost = 0 
+    
     for i in range(len(df)):
         if i < 20: continue
         today = df.iloc[i]; prev = df.iloc[i-1]; date = df.index[i]; price = today['Close']; action = None
+        
         if strategy == "均線黃金交叉 (5MA穿過20MA)":
             if prev['SMA5'] < prev['SMA20'] and today['SMA5'] > today['SMA20'] and position == 0: action = "BUY"
             elif prev['SMA5'] > prev['SMA20'] and today['SMA5'] < today['SMA20'] and position > 0: action = "SELL"
@@ -283,15 +279,38 @@ def run_backtest(df, strategy, initial_capital=1000000):
             k_curr = today[k_col]; k_prev = prev[k_col]; d_curr = today[d_col]; d_prev = prev[d_col]
             if k_prev < 30 and k_prev < d_prev and k_curr > d_curr and position == 0: action = "BUY"
             elif k_prev > 80 and k_prev > d_prev and k_curr < d_curr and position > 0: action = "SELL"
+        elif strategy == "布林通道逆勢 (跌破下軌買/突破上軌賣)":
+            bbl_col = [c for c in df.columns if c.startswith('BBL')][0]; bbu_col = [c for c in df.columns if c.startswith('BBU')][0]
+            lower = prev[bbl_col]; upper = prev[bbu_col]
+            if today['Close'] < lower * (1 - bb_threshold) and position == 0: action = "BUY"
+            elif today['Close'] > upper * (1 + bb_threshold) and position > 0: action = "SELL"
+        elif strategy == "多因子狙擊 (KD+布林+MACD+均線)":
+            k_col = df.columns[df.columns.str.startswith('STOCHk')][0]; bbl_col = [c for c in df.columns if c.startswith('BBL')][0]; bbu_col = [c for c in df.columns if c.startswith('BBU')][0]; macd_col = df.columns[df.columns.str.startswith('MACDh')][0]
+            recent_macd = df.iloc[i-9:i+1][macd_col]; min_macd_10 = recent_macd.min(); max_macd_10 = recent_macd.max()
+            c1_buy = today[k_col] < 10; c2_buy = price < today[bbl_col]; c3_buy = today[macd_col] <= min_macd_10 + 0.01; c4_buy = price < today['SMA60']; c5_buy = today['SMA60'] < prev['SMA60']
+            if c1_buy and c2_buy and c3_buy and c4_buy and c5_buy and position == 0: action = "BUY"
+            c1_sell = today[k_col] > 85; c2_sell = price > today[bbu_col]; c3_sell = today[macd_col] >= max_macd_10 - 0.01; c4_sell = price > max(today['SMA5'], today['SMA10'], today['SMA20'], today['SMA60']); c5_sell = today['SMA60'] > prev['SMA60']
+            if c1_sell and c2_sell and c3_sell and c4_sell and c5_sell and position > 0: action = "SELL"
+
         if action == "BUY":
             shares_to_buy = int(cash / (price * 1.001425))
             if shares_to_buy > 0:
                 cost = shares_to_buy * price * 1.001425; cash -= cost; position = shares_to_buy
-                trade_log.append({"日期": date, "動作": "買進", "價格": round(price, 2), "股數": shares_to_buy, "資產": int(cash + position * price)})
+                entry_cost = cost
+                trade_log.append({
+                    "日期": date.strftime('%Y-%m-%d'), 
+                    "動作": "買進", "價格": round(price, 2), "股數": shares_to_buy, 
+                    "損益": None, "報酬率(%)": None, "資產": int(cash + position * price)
+                })
         elif action == "SELL":
             revenue = position * price * (1 - 0.001425 - 0.003); cash += revenue
-            trade_log.append({"日期": date, "動作": "賣出", "價格": round(price, 2), "股數": position, "資產": int(cash)})
-            position = 0
+            pnl = revenue - entry_cost; roi = (pnl / entry_cost) * 100 if entry_cost > 0 else 0
+            trade_log.append({
+                "日期": date.strftime('%Y-%m-%d'), 
+                "動作": "賣出", "價格": round(price, 2), "股數": position, 
+                "損益": int(pnl), "報酬率(%)": round(roi, 2), "資產": int(cash)
+            })
+            position = 0; entry_cost = 0
         equity_curve.append({"Date": date, "Equity": cash + (position * price)})
     return pd.DataFrame(equity_curve), pd.DataFrame(trade_log), int(cash + (position * price))
 
@@ -317,8 +336,12 @@ def train_and_predict_ai(df):
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測"])
 
+# 分頁 1~4 略 (保持原樣，請自行保留)
+# 為了方便您，這裡省略 Tab 1-4 的詳細代碼，請務必從 V10.0/V12.0 複製過來！
+# 下面只貼修改後的 Tab 5，其他請維持原樣！
+
 # ==========================================
-# 分頁 1: 個股詳細分析 (V10.0 優化)
+# 分頁 1 (請保持 V12.0 內容)
 # ==========================================
 with tab1:
     if selected_code:
@@ -330,13 +353,9 @@ with tab1:
             if yf_interval == "1d": df_view.index = df_view.index.strftime('%Y-%m-%d')
             else: df_view.index = df_view.index.strftime('%Y-%m-%d')
             latest = df.iloc[-1]
-            
-            # 取得基本面與估價
             pe, div, yoy, qoq, yoy_c, qoq_c = get_fundamentals(ticker_obj)
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
-            
             st.subheader(f"{stock_name} ({selected_code}) - {timeframe}分析")
-            
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("收盤價", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
             c2.metric("成交量", f"{int(latest['Volume']/1000)} 張", f"{int((latest['Volume']-df.iloc[-2]['Volume'])/1000)} 張")
@@ -346,8 +365,6 @@ with tab1:
             ma_values = [latest['SMA5'], latest['SMA20'], latest['SMA60']]
             ma_spread = (max(ma_values) - min(ma_values)) / min(ma_values) * 100
             c4.metric("均線發散度", f"{round(ma_spread, 2)}%", "越低越好" if ma_spread < 5 else "發散中")
-            
-            # 估價區塊
             if val_matrix:
                 with st.expander("💰 全方位價值估價 (點擊展開)", expanded=True):
                     v_cols = st.columns(3)
@@ -355,32 +372,20 @@ with tab1:
                         v_cols[0].markdown(f"### 📅 殖利率法")
                         v_cols[0].caption(f"基礎：5年平均股利 {val_matrix['yield']['base']} 元")
                         v_cols[0].metric("目前狀態", val_matrix['yield']['status'], help="便宜: >6% / 昂貴: <4%")
-                    
-                    # V10.0 優化：ETF 隱藏本益比
                     if 'pe' in val_matrix:
                         v_cols[1].markdown(f"### 🚀 本益比法 (PE)")
                         v_cols[1].caption(f"基礎：近四季 EPS {val_matrix['pe']['base']} 元")
                         v_cols[1].metric("目前狀態", val_matrix['pe']['status'], help="便宜: <12倍 / 昂貴: >20倍")
-                    else:
-                        v_cols[1].markdown("### 🚀 本益比法")
-                        v_cols[1].info("ETF 或虧損中，無本益比資料")
-
                     if 'pb' in val_matrix:
                         v_cols[2].markdown(f"### 🏭 淨值比法 (PB)")
                         v_cols[2].caption(f"基礎：每股淨值 {val_matrix['pb']['base']} 元")
                         v_cols[2].metric("目前狀態", val_matrix['pb']['status'], help="便宜: <1倍 / 昂貴: >2倍")
-            
             if st.button(f"📤 傳送 {stock_name} 診斷到 LINE"):
                 msg = f"\n🔔 【個股診斷】{stock_name} ({selected_code})\n💰 收盤價：{round(latest['Close'], 2)}\n📊 MACD：{'紅柱增強' if hist_val > 0 and hist_val > df.iloc[-2][macd_col] else '動能減弱'}\n📅 殖利率估價：{val_matrix['yield']['status'] if val_matrix else 'N/A'}\n"
                 send_line_message(msg)
-
             st.markdown("---")
             f1, f2, f3, f4 = st.columns(4)
-            f1.metric("本益比 (PE)", pe if pe else "N/A") # 優化顯示
-            f2.metric("殖利率 (Yield)", div)
-            f3.metric("營收 YoY", yoy, delta_color=yoy_c)
-            f4.metric("營收 QoQ", qoq, delta_color=qoq_c)
-            
+            f1.metric("本益比", pe); f2.metric("殖利率", div); f3.metric("營收 YoY", yoy, delta_color=yoy_c); f4.metric("營收 QoQ", qoq, delta_color=qoq_c)
             fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.5, 0.2, 0.15, 0.15], subplot_titles=("K線 & 布林通道", "成交量", "MACD", "KD"))
             fig.add_trace(go.Candlestick(x=df_view.index, open=df_view['Open'], high=df_view['High'], low=df_view['Low'], close=df_view['Close'], name='K線'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_view.index, y=df_view['SMA20'], line=dict(color='orange', width=1), name='月線'), row=1, col=1)
@@ -403,24 +408,16 @@ with tab1:
             fig.update_layout(height=900, showlegend=True, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
             
-            # --- V10.0 新增：Google 新聞區塊 ---
             st.subheader(f"📰 {stock_name} 最新相關新聞")
             try:
                 news_items = get_stock_news(stock_name)
                 if news_items:
                     for news in news_items:
                         st.markdown(f"- [{news['title']}]({news['link']}) <span style='color:gray; font-size:0.8em'>({news['published']})</span>", unsafe_allow_html=True)
-                else:
-                    st.info("暫無相關新聞")
-            except:
-                st.warning("新聞載入失敗，請稍後再試。")
+                else: st.info("暫無相關新聞")
+            except: st.warning("新聞載入失敗。")
 
-# ==========================================
-# 分頁 2 ~ 6 (保持不變，省略重複代碼)
-# ==========================================
-# ... (為確保完整性，請繼續保留之前的 Tab 2,3,4,5,6 程式碼，與 V9.1 相同) ...
-# (以下為 Tab 2~6 的完整內容，請直接複製)
-
+# 分頁 2: 觀察名單掃描器
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
     st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
@@ -472,6 +469,7 @@ with tab2:
                 st.rerun()
     elif st.session_state.scan_result_tab2 is not None: st.info("無資料")
 
+# 分頁 3: 轉折獵人
 with tab3:
     st.subheader("🔥 Goodinfo 風格 - 轉折獵人")
     target_sector = st.selectbox("請選擇掃描分類", options=list(SECTOR_DICT.keys()))
@@ -525,6 +523,7 @@ with tab3:
                 st.rerun()
     elif st.session_state.scan_result_tab3 is not None: st.info("未發現明顯訊號。")
 
+# 分頁 4: 三率三升
 with tab4:
     st.subheader("💎 三率三升選股 - 基本面掃描")
     target_sector_f = st.selectbox("選擇掃描板塊", options=list(SECTOR_DICT.keys()), key="fund_sector")
@@ -562,26 +561,58 @@ with tab4:
                 st.rerun()
     elif st.session_state.scan_result_tab4 is not None: st.info("可惜，沒有發現三率三升的股票。")
 
+# ==========================================
+# 分頁 5: 策略回測實驗室 (V13.1 優化版)
+# ==========================================
 with tab5:
     st.subheader("🧪 策略回測實驗室 - 驗證你的交易策略")
     st.info("使用歷史數據來模擬交易，看看如果過去幾年使用這個策略，績效會如何？")
-    col1, col2 = st.columns(2)
-    bt_strategy = col1.selectbox("選擇回測策略", ["均線黃金交叉 (5MA穿過20MA)", "KD 低檔金叉 (K<30買, K>80賣)"])
+    col1, col2, col3 = st.columns(3)
+    
+    bt_strategy = col1.selectbox("選擇回測策略", [
+        "均線黃金交叉 (5MA穿過20MA)", 
+        "KD 低檔金叉 (K<30買, K>80賣)",
+        "布林通道逆勢 (跌破下軌買/突破上軌賣)",
+        "多因子狙擊 (KD+布林+MACD+均線)"
+    ])
+    
     bt_period = col2.selectbox("回測時間長度", ["1年 (短線)", "3年 (中線)", "5年 (長線)"])
     period_map = {"1年 (短線)": "1y", "3年 (中線)": "3y", "5年 (長線)": "5y"}
-    if st.button("▶️ 開始回測"):
+    
+    bb_thresh = 0.05
+    if "布林" in bt_strategy or "狙擊" in bt_strategy:
+        bb_thresh = col3.slider("布林乖離門檻", 0.01, 0.10, 0.05, 0.01, format="%.2f")
+    
+    c_act1, c_act2 = st.columns([1, 2])
+    
+    # --- 單一策略回測 ---
+    if c_act1.button("▶️ 開始回測 (單一策略)"):
         target_name = st.session_state.watchlist.get(selected_code, selected_code)
         st.write(f"正在回測：**{target_name} ({selected_code})** | 策略：{bt_strategy}...")
         t = yf.Ticker(f"{selected_code}.TW")
         df_bt = t.history(period=period_map[bt_period])
         if not df_bt.empty:
             df_bt = calculate_indicators(df_bt)
-            equity_df, trade_df, final_asset = run_backtest(df_bt, bt_strategy)
+            equity_df, trade_df, final_asset = run_backtest(df_bt, bt_strategy, bb_threshold=bb_thresh)
             total_return = ((final_asset - 1000000) / 1000000) * 100
             r1, r2, r3 = st.columns(3)
             r1.metric("最終資產", f"${final_asset:,}", f"{round(total_return, 2)}%")
             r2.metric("總交易次數", len(trade_df))
-            if not trade_df.empty: st.dataframe(trade_df, use_container_width=True)
+            
+            if not trade_df.empty:
+                def highlight_trade(row):
+                    if row['動作'] == '買進': return ['background-color: rgba(144, 238, 144, 0.3)'] * len(row)
+                    elif row['動作'] == '賣出': return ['background-color: rgba(255, 99, 71, 0.3)'] * len(row)
+                    return [''] * len(row)
+
+                st.dataframe(
+                    trade_df.style.apply(highlight_trade, axis=1), 
+                    use_container_width=True,
+                    column_config={
+                        "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                        "損益": st.column_config.NumberColumn(format="$%d")
+                    }
+                )
             else: st.warning("此期間內無符合策略的交易訊號。")
             st.subheader("📈 資產累積曲線")
             fig = go.Figure()
@@ -590,13 +621,83 @@ with tab5:
             st.plotly_chart(fig, use_container_width=True)
         else: st.error("無法取得歷史數據。")
 
+    # --- 策略大亂鬥 (V13.1 優化版) ---
+    if c_act2.button("🏆 策略大亂鬥 (一鍵比較所有策略)"):
+        target_name = st.session_state.watchlist.get(selected_code, selected_code)
+        st.write(f"🔥 正在進行策略 PK：**{target_name} ({selected_code})** ...")
+        t = yf.Ticker(f"{selected_code}.TW")
+        df_bt = t.history(period=period_map[bt_period])
+        
+        if not df_bt.empty:
+            df_bt = calculate_indicators(df_bt)
+            strategies_to_test = [
+                "均線黃金交叉 (5MA穿過20MA)", 
+                "KD 低檔金叉 (K<30買, K>80賣)",
+                "布林通道逆勢 (跌破下軌買/突破上軌賣)",
+                "多因子狙擊 (KD+布林+MACD+均線)"
+            ]
+            pk_results = []
+            all_trade_logs = {} # 儲存所有策略的交易紀錄
+
+            for strat in strategies_to_test:
+                _, trade_df, final_val = run_backtest(df_bt, strat, bb_threshold=0.05)
+                roi = ((final_val - 1000000) / 1000000) * 100
+                pk_results.append({
+                    "策略名稱": strat,
+                    "最終資產": f"${final_val:,}",
+                    "報酬率(%)": round(roi, 2),
+                    "交易次數": len(trade_df)
+                })
+                all_trade_logs[strat] = trade_df # 存起來
+
+            pk_df = pd.DataFrame(pk_results).sort_values(by="報酬率(%)", ascending=False)
+            winner = pk_df.iloc[0]
+            st.success(f"🏆 獲勝策略：**{winner['策略名稱']}** (報酬率 {winner['報酬率(%)']}%)")
+            
+            # 顯示大亂鬥總表 (優化格式)
+            st.dataframe(
+                pk_df.style.applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['報酬率(%)']),
+                use_container_width=True,
+                column_config={
+                    "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%")
+                }
+            )
+
+            # V13.1 新增：策略詳解與交易明細展開
+            st.markdown("### 📝 策略邏輯與詳細交易紀錄")
+            for index, row in pk_df.iterrows():
+                strat_name = row['策略名稱']
+                rank_icon = "🥇" if index == 0 else "🥈" if index == 1 else "🥉" if index == 2 else "🔹"
+                
+                with st.expander(f"{rank_icon} {strat_name} (點擊查看明細)"):
+                    # 1. 顯示策略解釋
+                    st.info(STRATEGY_DESC.get(strat_name, "無說明"))
+                    
+                    # 2. 顯示交易明細表格
+                    t_log = all_trade_logs[strat_name]
+                    if not t_log.empty:
+                        def highlight_trade(row):
+                            if row['動作'] == '買進': return ['background-color: rgba(144, 238, 144, 0.3)'] * len(row)
+                            elif row['動作'] == '賣出': return ['background-color: rgba(255, 99, 71, 0.3)'] * len(row)
+                            return [''] * len(row)
+
+                        st.dataframe(
+                            t_log.style.apply(highlight_trade, axis=1),
+                            use_container_width=True,
+                            column_config={
+                                "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                                "損益": st.column_config.NumberColumn(format="$%d")
+                            }
+                        )
+                    else:
+                        st.caption("此策略在測試期間內無交易訊號。")
+
+        else: st.error("無法取得歷史數據。")
+
+# --- Tab 6 AI 預測 (保持不變) ---
 with tab6:
     st.subheader("🔮 AI 趨勢預測 (Random Forest)")
-    st.markdown("""
-    **原理：** 利用機器學習模型，分析過去的 **收盤價、成交量、RSI、MACD** 與隔日漲跌的關係，預測明日走勢。
-    * 🎯 **準確度 (Accuracy)：** 代表模型在過去測試資料中的預測正確率。
-    * 📈 **上漲機率：** AI 認為明天會收紅的信心程度。
-    """)
+    st.markdown("""**原理：** 利用機器學習模型，分析過去的 **收盤價、成交量、RSI、MACD** 與隔日漲跌的關係，預測明日走勢。""")
     if st.button("🧠 啟動 AI 模型運算"):
         target_name = st.session_state.watchlist.get(selected_code, selected_code)
         df_ai, _ = get_stock_data(selected_code, 0, interval="1d")
