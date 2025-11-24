@@ -6,47 +6,18 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 import json
-import os # V14.0 新增：用於處理檔案路徑
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
+import os
+import feedparser
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V14.0", layout="wide")
-st.title("📈 艾倫杭特 V14.0 - 永續記憶版")
+st.set_page_config(page_title="艾倫杭特 V16.4", layout="wide")
+st.title("📈 艾倫杭特 V16.4 - 籌碼視覺優化版")
 
 # ==========================================
-# 💾 V14.0 核心：資料庫存取函數
-# ==========================================
-WATCHLIST_FILE = 'watchlist.json'
-
-# 預設清單 (當找不到存檔時使用)
-DEFAULT_WATCHLIST = {
-    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2364": "倫飛",
-    "3005": "神基", "2382": "廣達", "3231": "緯創", "2603": "長榮",
-    "3004": "豐達科", "2850": "新產"
-}
-
-def load_watchlist():
-    """從 JSON 檔案讀取觀察名單，如果不存在則回傳預設值"""
-    if os.path.exists(WATCHLIST_FILE):
-        try:
-            with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return DEFAULT_WATCHLIST.copy()
-    return DEFAULT_WATCHLIST.copy()
-
-def save_watchlist(data):
-    """將觀察名單寫入 JSON 檔案"""
-    try:
-        with open(WATCHLIST_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        st.error(f"存檔失敗：{e}")
-
-# ==========================================
-# 🔑 LINE 設定區
+# 🔑 LINE 設定區 (請填入您的資料)
 # ==========================================
 LINE_USER_ID = "U2e18c346fe075d2f62986166a4a6ef1c" 
 LINE_CHANNEL_TOKEN = "DNsc+VqdlEliUHVd92ozW59gLdEDJULKIslQOqlTsP6qs5AY3Ydaj8X8l1iShfRHFzWpL++lbb5e4GiDHrioF6JdwmsiA/OHjaB4ZZYGG1TqwUth6hfcbHrHgVscPSZmVGIx4n/ZXYAZhPrvGCKqiwdB04t89/1O/w1cDnyilFU="
@@ -61,6 +32,25 @@ def send_line_message(message_text):
         if response.status_code == 200: st.toast("✅ LINE 發送成功！", icon="📲")
         else: st.error(f"發送失敗：{response.text}")
     except Exception as e: st.error(f"連線錯誤：{e}")
+
+# --- 資料存取 ---
+WATCHLIST_FILE = 'watchlist.json'
+DEFAULT_WATCHLIST = {
+    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2364": "倫飛",
+    "3005": "神基", "2382": "廣達", "3231": "緯創", "2603": "長榮",
+    "3004": "豐達科", "2850": "新產"
+}
+def load_watchlist():
+    if os.path.exists(WATCHLIST_FILE):
+        try:
+            with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f: return json.load(f)
+        except: return DEFAULT_WATCHLIST.copy()
+    return DEFAULT_WATCHLIST.copy()
+
+def save_watchlist(data):
+    try:
+        with open(WATCHLIST_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
+    except: pass
 
 # --- 0.1 中文名稱對照表 ---
 STOCK_NAMES = {
@@ -96,38 +86,26 @@ STOCK_NAMES = {
     "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
 }
 
-# --- 1. 初始化 Session State (V14.0 改為從檔案讀取) ---
-if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = load_watchlist() # 優先讀取檔案
-
+# --- State ---
+if 'watchlist' not in st.session_state: st.session_state.watchlist = load_watchlist()
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
 if 'scan_result_tab4' not in st.session_state: st.session_state.scan_result_tab4 = None
 if 'ai_data' not in st.session_state: st.session_state.ai_data = None
 if 'sb_selected_code' not in st.session_state:
-    # 確保預設值存在於清單中
-    if st.session_state.watchlist:
-        st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
-    else:
-        st.session_state.sb_selected_code = "2330" # 防呆
+    if st.session_state.watchlist: st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
+    else: st.session_state.sb_selected_code = "2330"
 
-# ==========================================
-# 🛠️ 狀態管理中樞 (包含自動存檔邏輯)
-# ==========================================
 if 'pending_update' in st.session_state and st.session_state.pending_update:
     update_data = st.session_state.pending_update
-    new_code = update_data['code']
-    new_name = update_data['name']
-    
+    new_code = update_data['code']; new_name = update_data['name']
     if new_code not in st.session_state.watchlist:
-        st.session_state.watchlist[new_code] = new_name
-        save_watchlist(st.session_state.watchlist) # V14.0: 有更動就存檔
-    
+        st.session_state.watchlist[new_code] = new_name; save_watchlist(st.session_state.watchlist)
     st.session_state.sb_selected_code = new_code
-    st.toast(f"✅ 已鎖定：{new_name} ({new_code})，請查看儀表板", icon="🎉")
+    st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- 0. 內建熱門產業清單 ---
+# --- SECTOR_DICT (略，保持不變) ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -170,19 +148,16 @@ with st.sidebar.expander("新增/移除個股"):
     c1, c2 = st.columns(2)
     new_code = c1.text_input("代號", placeholder="2395", key="input_code", on_change=auto_fill_name)
     new_name = c2.text_input("名稱", placeholder="自動帶入...", key="input_name")
-    
     if st.button("➕ 新增"):
         if new_code and new_name:
             st.session_state.watchlist[new_code] = new_name
-            save_watchlist(st.session_state.watchlist) # V14.0: 存檔
-            st.success(f"已新增 {new_name} ({new_code})")
+            save_watchlist(st.session_state.watchlist)
             st.rerun()
-
     remove_target = st.selectbox("移除股票", options=list(st.session_state.watchlist.keys()), format_func=lambda x: f"{x} {st.session_state.watchlist[x]}")
     if st.button("➖ 移除"):
         if remove_target in st.session_state.watchlist:
             del st.session_state.watchlist[remove_target]
-            save_watchlist(st.session_state.watchlist) # V14.0: 存檔
+            save_watchlist(st.session_state.watchlist)
             if remove_target == st.session_state.sb_selected_code:
                 if st.session_state.watchlist:
                     st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
@@ -198,41 +173,28 @@ lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 
 
 # --- 核心功能區 ---
 def get_stock_data(symbol, bars=200, interval="1d"):
-    ticker = f"{symbol}.TW"
-    stock = yf.Ticker(ticker)
+    ticker = f"{symbol}.TW"; stock = yf.Ticker(ticker)
     if interval == "1d": period_str = f"{bars + 200}d"
     elif interval == "1wk": period_str = "5y"
     else: period_str = "max"
     df = stock.history(period=period_str, interval=interval) 
-    if df.empty:
-        ticker = f"{symbol}.TWO" 
-        stock = yf.Ticker(ticker)
-        df = stock.history(period=period_str, interval=interval)
+    if df.empty: ticker = f"{symbol}.TWO"; stock = yf.Ticker(ticker); df = stock.history(period=period_str, interval=interval)
     return df, stock
 
 def get_stock_news(stock_name):
     encoded_name = requests.utils.quote(stock_name)
     rss_url = f"https://news.google.com/rss/search?q={encoded_name}+stock&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     try:
-        import feedparser
         feed = feedparser.parse(rss_url)
-        news_list = [{"title": entry.title, "link": entry.link, "published": entry.published} for entry in feed.entries[:5]]
-        return news_list
+        return [{"title": entry.title, "link": entry.link, "published": entry.published} for entry in feed.entries[:5]]
     except: return []
 
 def calculate_indicators(df):
-    df['SMA5'] = ta.sma(df['Close'], length=5)
-    df['SMA10'] = ta.sma(df['Close'], length=10)
-    df['SMA20'] = ta.sma(df['Close'], length=20)
-    df['SMA60'] = ta.sma(df['Close'], length=60)
-    df['Vol_SMA5'] = ta.sma(df['Volume'], length=5)
-    macd = ta.macd(df['Close']) 
-    df = pd.concat([df, macd], axis=1)
-    k_d = ta.stoch(df['High'], df['Low'], df['Close']) 
-    df = pd.concat([df, k_d], axis=1)
-    bb = ta.bbands(df['Close'], length=20, std=2)
-    df = pd.concat([df, bb], axis=1)
-    df['RSI'] = ta.rsi(df['Close'], length=14)
+    df['SMA5'] = ta.sma(df['Close'], length=5); df['SMA10'] = ta.sma(df['Close'], length=10); df['SMA20'] = ta.sma(df['Close'], length=20); df['SMA60'] = ta.sma(df['Close'], length=60); df['Vol_SMA5'] = ta.sma(df['Volume'], length=5)
+    macd = ta.macd(df['Close']); df = pd.concat([df, macd], axis=1)
+    k_d = ta.stoch(df['High'], df['Low'], df['Close']); df = pd.concat([df, k_d], axis=1)
+    bb = ta.bbands(df['Close'], length=20, std=2); df = pd.concat([df, bb], axis=1)
+    df['RSI'] = ta.rsi(df['Close'], length=14); df['OBV'] = ta.obv(df['Close'], df['Volume']); df['AD'] = ta.ad(df['High'], df['Low'], df['Close'], df['Volume'])
     return df
 
 def get_fundamentals(stock_obj):
@@ -284,8 +246,7 @@ def check_three_rates(stock_obj):
     try:
         fin = stock_obj.quarterly_financials
         if fin.empty or 'Total Revenue' not in fin.index or 'Gross Profit' not in fin.index: return False, {}
-        fin = fin.sort_index(axis=1, ascending=False)
-        q1 = fin.iloc[:, 0]; q2 = fin.iloc[:, 1]
+        fin = fin.sort_index(axis=1, ascending=False); q1 = fin.iloc[:, 0]; q2 = fin.iloc[:, 1]
         try:
             gm_q1 = q1['Gross Profit'] / q1['Total Revenue']; gm_q2 = q2['Gross Profit'] / q2['Total Revenue']
             op_label = 'Operating Income' if 'Operating Income' in fin.index else 'Operating Profit'
@@ -297,13 +258,10 @@ def check_three_rates(stock_obj):
     except: return False, {}
 
 def run_backtest(df, strategy, initial_capital=1000000, bb_threshold=0.05):
-    cash = initial_capital; position = 0; equity_curve = []; trade_log = []
-    entry_cost = 0 
-    
+    cash = initial_capital; position = 0; equity_curve = []; trade_log = []; entry_cost = 0 
     for i in range(len(df)):
         if i < 20: continue
         today = df.iloc[i]; prev = df.iloc[i-1]; date = df.index[i]; price = today['Close']; action = None
-        
         if strategy == "均線黃金交叉 (5MA穿過20MA)":
             if prev['SMA5'] < prev['SMA20'] and today['SMA5'] > today['SMA20'] and position == 0: action = "BUY"
             elif prev['SMA5'] > prev['SMA20'] and today['SMA5'] < today['SMA20'] and position > 0: action = "SELL"
@@ -324,42 +282,28 @@ def run_backtest(df, strategy, initial_capital=1000000, bb_threshold=0.05):
             if c1_buy and c2_buy and c3_buy and c4_buy and c5_buy and position == 0: action = "BUY"
             c1_sell = today[k_col] > 85; c2_sell = price > today[bbu_col]; c3_sell = today[macd_col] >= max_macd_10 - 0.01; c4_sell = price > max(today['SMA5'], today['SMA10'], today['SMA20'], today['SMA60']); c5_sell = today['SMA60'] > prev['SMA60']
             if c1_sell and c2_sell and c3_sell and c4_sell and c5_sell and position > 0: action = "SELL"
-
         if action == "BUY":
-            shares_to_buy = int(cash / (price * 1.001425))
-            if shares_to_buy > 0:
-                cost = shares_to_buy * price * 1.001425; cash -= cost; position = shares_to_buy
-                entry_cost = cost
-                trade_log.append({"日期": date.strftime('%Y-%m-%d'), "動作": "買進", "價格": round(price, 2), "股數": shares_to_buy, "損益": None, "報酬率(%)": None, "資產": int(cash + position * price)})
+            shares_to_buy = int(cash / (price * 1.001425)); cost = shares_to_buy * price * 1.001425; cash -= cost; position = shares_to_buy; entry_cost = cost
+            trade_log.append({"日期": date.strftime('%Y-%m-%d'), "動作": "買進", "價格": round(price, 2), "股數": shares_to_buy, "損益": None, "報酬率(%)": None, "資產": int(cash + position * price)})
         elif action == "SELL":
-            revenue = position * price * (1 - 0.001425 - 0.003); cash += revenue
-            pnl = revenue - entry_cost; roi = (pnl / entry_cost) * 100 if entry_cost > 0 else 0
+            revenue = position * price * (1 - 0.001425 - 0.003); cash += revenue; pnl = revenue - entry_cost; roi = (pnl / entry_cost) * 100 if entry_cost > 0 else 0
             trade_log.append({"日期": date.strftime('%Y-%m-%d'), "動作": "賣出", "價格": round(price, 2), "股數": position, "損益": int(pnl), "報酬率(%)": round(roi, 2), "資產": int(cash)})
             position = 0; entry_cost = 0
         equity_curve.append({"Date": date, "Equity": cash + (position * price)})
     return pd.DataFrame(equity_curve), pd.DataFrame(trade_log), int(cash + (position * price))
 
 def train_and_predict_ai(df):
-    data = df.copy()
-    data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
-    macd_col = data.columns[data.columns.str.startswith('MACDh')][0]
-    features = ['Close', 'Volume', 'RSI', macd_col]
-    data = data.dropna()
-    X = data[features]; y = data['Target']
-    split = int(len(X) * 0.8)
-    X_train, X_test = X.iloc[:split], X.iloc[split:]
-    y_train, y_test = y.iloc[:split], y.iloc[split:]
-    model = RandomForestClassifier(n_estimators=100, min_samples_split=10, random_state=42)
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
-    acc = accuracy_score(y_test, preds)
-    latest_data = X.iloc[[-1]]
-    prediction = model.predict(latest_data)
-    prob = model.predict_proba(latest_data)[0][1]
+    data = df.copy(); data['Target'] = (data['Close'].shift(-1) > data['Close']).astype(int)
+    macd_col = data.columns[data.columns.str.startswith('MACDh')][0]; features = ['Close', 'Volume', 'RSI', macd_col]
+    data = data.dropna(); X = data[features]; y = data['Target']
+    split = int(len(X) * 0.8); X_train, X_test = X.iloc[:split], X.iloc[split:]; y_train, y_test = y.iloc[:split], y.iloc[split:]
+    model = RandomForestClassifier(n_estimators=100, min_samples_split=10, random_state=42); model.fit(X_train, y_train)
+    preds = model.predict(X_test); acc = accuracy_score(y_test, preds)
+    latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
 # --- 介面分頁 ---
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
 
 # 分頁 1: 個股詳細分析
 with tab1:
@@ -369,8 +313,11 @@ with tab1:
         if not data.empty:
             df = calculate_indicators(data)
             df_view = df.tail(lookback_bars).copy()
+            
+            # V16.4 修正：強制轉換日期為字串 (Category) 以消除空隙
             if yf_interval == "1d": df_view.index = df_view.index.strftime('%Y-%m-%d')
             else: df_view.index = df_view.index.strftime('%Y-%m-%d')
+            
             latest = df.iloc[-1]
             pe, div, yoy, qoq, yoy_c, qoq_c = get_fundamentals(ticker_obj)
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
@@ -406,7 +353,10 @@ with tab1:
             f1, f2, f3, f4 = st.columns(4)
             f1.metric("本益比", pe); f2.metric("殖利率", div); f3.metric("營收 YoY", yoy, delta_color=yoy_c); f4.metric("營收 QoQ", qoq, delta_color=qoq_c)
             fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.5, 0.2, 0.15, 0.15], subplot_titles=("K線 & 布林通道", "成交量", "MACD", "KD"))
-            fig.add_trace(go.Candlestick(x=df_view.index, open=df_view['Open'], high=df_view['High'], low=df_view['Low'], close=df_view['Close'], name='K線'), row=1, col=1)
+            
+            # V16.4 修正：台股配色
+            fig.add_trace(go.Candlestick(x=df_view.index, open=df_view['Open'], high=df_view['High'], low=df_view['Low'], close=df_view['Close'], name='K線', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
+            
             fig.add_trace(go.Scatter(x=df_view.index, y=df_view['SMA20'], line=dict(color='orange', width=1), name='月線'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_view.index, y=df_view['SMA60'], line=dict(color='green', width=1), name='季線'), row=1, col=1)
             bbu_col = df.columns[df.columns.str.startswith('BBU')][0]
@@ -423,20 +373,20 @@ with tab1:
             fig.add_trace(go.Scatter(x=df_view.index, y=df_view[d_col], line=dict(color='orange', width=1, dash='dot'), name='D值'), row=4, col=1)
             fig.add_hline(y=80, line_dash="dash", line_color="gray", row=4, col=1)
             fig.add_hline(y=20, line_dash="dash", line_color="gray", row=4, col=1)
+            
+            # V16.4 修正：強制類別軸，移除空隙
             fig.update_xaxes(type='category', dtick=10 if yf_interval=="1d" else 5) 
+            
             fig.update_layout(height=900, showlegend=True, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
-            
             st.subheader(f"📰 {stock_name} 最新相關新聞")
             try:
                 news_items = get_stock_news(stock_name)
                 if news_items:
-                    for news in news_items:
-                        st.markdown(f"- [{news['title']}]({news['link']}) <span style='color:gray; font-size:0.8em'>({news['published']})</span>", unsafe_allow_html=True)
+                    for news in news_items: st.markdown(f"- [{news['title']}]({news['link']}) <span style='color:gray; font-size:0.8em'>({news['published']})</span>", unsafe_allow_html=True)
                 else: st.info("暫無相關新聞")
             except: st.warning("新聞載入失敗。")
 
-# 分頁 2: 觀察名單掃描器
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
     st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
@@ -463,7 +413,7 @@ with tab2:
                     scan_results.append({"代號": code, "名稱": name, "收盤價": latest['Close'], "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, "站上月線": "✅" if cond_above_ma20 else "❌", "量能爆發": "🔥" if cond_volume else "➖", "KD金叉": "✅" if cond_kd_gold else "➖", "MACD多頭": "✅" if cond_macd else "➖", "均線排列": "🌟" if cond_align else "➖"})
                 except: pass
             progress_bar.progress((i+1)/total)
-        progress_bar.empty()
+        progress.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
 
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
@@ -488,7 +438,6 @@ with tab2:
                 st.rerun()
     elif st.session_state.scan_result_tab2 is not None: st.info("無資料")
 
-# 分頁 3: 轉折獵人
 with tab3:
     st.subheader("🔥 Goodinfo 風格 - 轉折獵人")
     target_sector = st.selectbox("請選擇掃描分類", options=list(SECTOR_DICT.keys()))
@@ -542,7 +491,6 @@ with tab3:
                 st.rerun()
     elif st.session_state.scan_result_tab3 is not None: st.info("未發現明顯訊號。")
 
-# 分頁 4: 三率三升
 with tab4:
     st.subheader("💎 三率三升選股 - 基本面掃描")
     target_sector_f = st.selectbox("選擇掃描板塊", options=list(SECTOR_DICT.keys()), key="fund_sector")
@@ -564,7 +512,6 @@ with tab4:
             except: pass
             progress.progress((i+1)/total_scan)
         progress.empty()
-        status.text("基本面掃描完成！")
         st.session_state.scan_result_tab4 = pd.DataFrame(fund_results)
     if st.session_state.scan_result_tab4 is not None and not st.session_state.scan_result_tab4.empty:
         fund_df = st.session_state.scan_result_tab4
@@ -580,7 +527,6 @@ with tab4:
                 st.rerun()
     elif st.session_state.scan_result_tab4 is not None: st.info("可惜，沒有發現三率三升的股票。")
 
-# 分頁 5: 策略回測
 with tab5:
     st.subheader("🧪 策略回測實驗室 - 驗證你的交易策略")
     STRATEGY_DESC = {
@@ -612,12 +558,21 @@ with tab5:
             r1, r2, r3 = st.columns(3)
             r1.metric("最終資產", f"${final_asset:,}", f"{round(total_return, 2)}%")
             r2.metric("總交易次數", len(trade_df))
+            
             if not trade_df.empty:
                 def highlight_trade(row):
                     if row['動作'] == '買進': return ['background-color: rgba(144, 238, 144, 0.3)'] * len(row)
                     elif row['動作'] == '賣出': return ['background-color: rgba(255, 99, 71, 0.3)'] * len(row)
                     return [''] * len(row)
-                st.dataframe(trade_df.style.apply(highlight_trade, axis=1), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"), "損益": st.column_config.NumberColumn(format="$%d")})
+
+                st.dataframe(
+                    trade_df.style.apply(highlight_trade, axis=1), 
+                    use_container_width=True,
+                    column_config={
+                        "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                        "損益": st.column_config.NumberColumn(format="$%d")
+                    }
+                )
             else: st.warning("此期間內無符合策略的交易訊號。")
             st.subheader("📈 資產累積曲線")
             fig = go.Figure()
@@ -631,36 +586,68 @@ with tab5:
         st.write(f"🔥 正在進行策略 PK：**{target_name} ({selected_code})** ...")
         t = yf.Ticker(f"{selected_code}.TW")
         df_bt = t.history(period=period_map[bt_period])
+        
         if not df_bt.empty:
             df_bt = calculate_indicators(df_bt)
+            strategies_to_test = [
+                "均線黃金交叉 (5MA穿過20MA)", 
+                "KD 低檔金叉 (K<30買, K>80賣)",
+                "布林通道逆勢 (跌破下軌買/突破上軌賣)",
+                "多因子狙擊 (KD+布林+MACD+均線)"
+            ]
             pk_results = []
             all_trade_logs = {}
-            for strat in STRATEGY_DESC.keys():
+
+            for strat in strategies_to_test:
                 _, trade_df, final_val = run_backtest(df_bt, strat, bb_threshold=0.05)
                 roi = ((final_val - 1000000) / 1000000) * 100
-                pk_results.append({"策略名稱": strat, "最終資產": f"${final_val:,}", "報酬率(%)": round(roi, 2), "交易次數": len(trade_df)})
+                pk_results.append({
+                    "策略名稱": strat,
+                    "最終資產": f"${final_val:,}",
+                    "報酬率(%)": round(roi, 2),
+                    "交易次數": len(trade_df)
+                })
                 all_trade_logs[strat] = trade_df
+
             pk_df = pd.DataFrame(pk_results).sort_values(by="報酬率(%)", ascending=False)
             winner = pk_df.iloc[0]
             st.success(f"🏆 獲勝策略：**{winner['策略名稱']}** (報酬率 {winner['報酬率(%)']}%)")
-            st.dataframe(pk_df.style.applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['報酬率(%)']), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%")})
+            
+            st.dataframe(
+                pk_df.style.applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['報酬率(%)']),
+                use_container_width=True,
+                column_config={
+                    "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%")
+                }
+            )
+
             st.markdown("### 📝 策略邏輯與詳細交易紀錄")
             for index, row in pk_df.iterrows():
                 strat_name = row['策略名稱']
                 rank_icon = "🥇" if index == 0 else "🥈" if index == 1 else "🥉" if index == 2 else "🔹"
+                
                 with st.expander(f"{rank_icon} {strat_name} (點擊查看明細)"):
-                    st.info(STRATEGY_DESC.get(strat_name))
+                    st.info(STRATEGY_DESC.get(strat_name, "無說明"))
                     t_log = all_trade_logs[strat_name]
                     if not t_log.empty:
                         def highlight_trade(row):
                             if row['動作'] == '買進': return ['background-color: rgba(144, 238, 144, 0.3)'] * len(row)
                             elif row['動作'] == '賣出': return ['background-color: rgba(255, 99, 71, 0.3)'] * len(row)
                             return [''] * len(row)
-                        st.dataframe(t_log.style.apply(highlight_trade, axis=1), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"), "損益": st.column_config.NumberColumn(format="$%d")})
-                    else: st.caption("此策略在測試期間內無交易訊號。")
+
+                        st.dataframe(
+                            t_log.style.apply(highlight_trade, axis=1),
+                            use_container_width=True,
+                            column_config={
+                                "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                                "損益": st.column_config.NumberColumn(format="$%d")
+                            }
+                        )
+                    else:
+                        st.caption("此策略在測試期間內無交易訊號。")
+
         else: st.error("無法取得歷史數據。")
 
-# 分頁 6: AI 預測
 with tab6:
     st.subheader("🔮 AI 趨勢預測 (Random Forest)")
     st.markdown("""**原理：** 利用機器學習模型，分析過去的 **收盤價、成交量、RSI、MACD** 與隔日漲跌的關係，預測明日走勢。""")
@@ -692,3 +679,52 @@ with tab6:
         importance_df = pd.DataFrame({"指標": ai['feature_names'], "重要性": ai['importances']})
         importance_df = importance_df.sort_values(by="重要性", ascending=False)
         col2.dataframe(importance_df, use_container_width=True, hide_index=True)
+
+with tab7:
+    st.subheader("🕵️‍♂️ 籌碼與股權透視 - 追蹤大戶動向")
+    target_name = st.session_state.watchlist.get(selected_code, selected_code)
+    st.info(f"目前分析標的：**{target_name} ({selected_code})**")
+    
+    data_chip, _ = get_stock_data(selected_code, 100, interval="1d")
+    
+    if not data_chip.empty:
+        data_chip = calculate_indicators(data_chip)
+        df_view = data_chip.tail(60)
+        
+        # V16.4 修正：強制轉換日期為字串 (Category)
+        df_view.index = df_view.index.strftime('%Y-%m-%d')
+        
+        st.markdown("### 🤖 艾倫杭特・籌碼AI診斷 (近60日趨勢)")
+        price_trend = df_view.iloc[-1]['Close'] - df_view.iloc[0]['Close']
+        obv_trend = df_view.iloc[-1]['OBV'] - df_view.iloc[0]['OBV']
+        c_sum1, c_sum2 = st.columns(2)
+        c_sum1.metric("近60日股價漲跌", f"{round(price_trend, 2)}", delta_color="normal" if price_trend > 0 else "inverse")
+        c_sum1.metric("近60日 OBV 變化", f"{int(obv_trend)}", delta="大戶進貨" if obv_trend > 0 else "大戶出貨", delta_color="normal" if obv_trend > 0 else "inverse")
+        
+        if price_trend < 0 and obv_trend > 0: st.success("🔥 **主力背離吸籌 (強力買訊)**：股價下跌但籌碼逆勢增加，大戶正在低檔接刀。")
+        elif price_trend > 0 and obv_trend > 0: st.success("✅ **量價齊揚 (健康多頭)**：股價與籌碼同步上漲，趨勢健康。")
+        elif price_trend > 0 and obv_trend < 0: st.error("⚠️ **主力背離出貨 (危險訊號)**：股價上漲但籌碼在流出，小心假突破。")
+        else: st.warning("❌ **量價同步殺盤 (空頭修正)**：股價與籌碼同步下跌，趨勢偏空。")
+            
+        st.markdown("### 🐋 近期主力籌碼動能圖 (近60日)")
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.4])
+        
+        # V16.4 修正：紅綠配色
+        fig.add_trace(go.Candlestick(x=df_view.index, open=df_view['Open'], high=df_view['High'], low=df_view['Low'], close=df_view['Close'], name='股價', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
+        
+        fig.add_trace(go.Scatter(x=df_view.index, y=df_view['OBV'], line=dict(color='orange', width=2), name='OBV (能量潮)'), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df_view.index, y=df_view['AD'], line=dict(color='cyan', width=2, dash='dot'), name='A/D Line (累積派發)'), row=2, col=1)
+        
+        # V16.4 修正：移除空隙
+        fig.update_xaxes(type='category', dtick=5)
+        
+        fig.update_layout(height=600, xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig, use_container_width=True)
+    else: st.error("無法取得籌碼計算所需數據。")
+
+    st.markdown("---")
+    st.markdown("### 🚀 外部籌碼傳送門")
+    c_link1, c_link2, c_link3 = st.columns(3)
+    c_link1.link_button(f"📊 集保分佈 (Goodinfo)", f"https://goodinfo.tw/tw/EquityDistributionClassHis.asp?STOCK_ID={selected_code}", icon="🔗", type="primary")
+    c_link2.link_button(f"🐳 主力動向 (Goodinfo)", f"https://goodinfo.tw/tw/ShowK_Chart.asp?STOCK_ID={selected_code}&CHT_CAT2=DATE", icon="🌊")
+    c_link3.link_button("🏛️ 集保結算所 (官方)", "https://www.tdcc.com.tw/portal/zh/smWeb/qryStock", icon="🇹🇼")
