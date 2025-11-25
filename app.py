@@ -11,10 +11,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 import os
 import feedparser
+import twstock # V17.1 新增
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V17.0", layout="wide")
-st.title("📈 艾倫杭特 V17.0 - 當沖戰情室版")
+st.set_page_config(page_title="艾倫杭特 V17.1", layout="wide")
+st.title("📈 艾倫杭特 V17.1 - 即時報價戰情版")
 
 # ==========================================
 # 🔑 LINE 設定區
@@ -101,7 +102,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (保持 V16.0 內容) ---
+# --- SECTOR_DICT (略) ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -138,8 +139,7 @@ with st.sidebar.expander("新增/移除個股"):
             else:
                 try:
                     t = yf.Ticker(f"{code}.TW"); name = t.info.get('longName') or t.info.get('shortName')
-                    if not name:
-                        t = yf.Ticker(f"{code}.TWO"); name = t.info.get('longName') or t.info.get('shortName')
+                    if not name: t = yf.Ticker(f"{code}.TWO"); name = t.info.get('longName') or t.info.get('shortName')
                     if name: st.session_state.input_name = name
                 except: pass
     c1, c2 = st.columns(2)
@@ -164,16 +164,28 @@ interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
 lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 150)
 
+# --- V17.1 新增：即時報價函數 (Real-time) ---
+def get_realtime_quote(code):
+    try:
+        stock = twstock.realtime.get(code)
+        if stock['success']:
+            return {
+                "price": float(stock['realtime']['latest_trade_price']),
+                "high": float(stock['realtime']['high']),
+                "low": float(stock['realtime']['low']),
+                "open": float(stock['realtime']['open']),
+                "time": stock['info']['time']
+            }
+    except: return None
+    return None
+
 # --- 核心功能區 ---
 def get_stock_data(symbol, bars=200, interval="1d"):
     ticker = f"{symbol}.TW"; stock = yf.Ticker(ticker)
-    
-    # 判斷抓取區間
     if interval == "1d": period_str = f"{bars + 200}d"
     elif interval == "1wk": period_str = "5y"
-    elif interval == "5m": period_str = "5d" # V17.0: 當沖只抓最近5天(包含今天)
+    elif interval == "5m": period_str = "5d" # 當沖用
     else: period_str = "max"
-    
     df = stock.history(period=period_str, interval=interval) 
     if df.empty: ticker = f"{symbol}.TWO"; stock = yf.Ticker(ticker); df = stock.history(period=period_str, interval=interval)
     return df, stock
@@ -191,17 +203,9 @@ def calculate_indicators(df):
     macd = ta.macd(df['Close']); df = pd.concat([df, macd], axis=1)
     k_d = ta.stoch(df['High'], df['Low'], df['Close']); df = pd.concat([df, k_d], axis=1)
     bb = ta.bbands(df['Close'], length=20, std=2); df = pd.concat([df, bb], axis=1)
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    # 籌碼指標
-    df['OBV'] = ta.obv(df['Close'], df['Volume'])
-    df['AD'] = ta.ad(df['High'], df['Low'], df['Close'], df['Volume'])
-    
-    # V17.0 新增：VWAP (成交量加權平均價)
-    try:
-        # VWAP 需要 datetime index
-        df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
+    df['RSI'] = ta.rsi(df['Close'], length=14); df['OBV'] = ta.obv(df['Close'], df['Volume']); df['AD'] = ta.ad(df['High'], df['Low'], df['Close'], df['Volume'])
+    try: df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume']) # V17.0
     except: pass
-    
     return df
 
 def get_fundamentals(stock_obj):
@@ -302,18 +306,28 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
+# --- V17.1: 即時報價看板 (Header) ---
+stock_name = st.session_state.watchlist.get(selected_code, selected_code)
+rt_data = get_realtime_quote(selected_code)
+
+if rt_data:
+    st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("成交價 (Real-time)", f"{rt_data['price']}", f"資料時間: {rt_data['time']}")
+    r2.metric("開盤", rt_data['open'])
+    r3.metric("最高", rt_data['high'])
+    r4.metric("最低", rt_data['low'])
+    st.caption("⚠️ 注意：上方為 twstock 抓取的證交所即時快照。下方圖表仍使用 Yahoo Finance (延遲 20分)。")
+else:
+    # 如果 twstock 抓不到 (可能盤後或 IP 限制)，顯示一般標題
+    pass 
+
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
 
-# Tab 1~6 保持 V16.4 版內容 (為節省篇幅省略，請務必完整複製保留)
-# ...
-# 請務必貼上 V16.4 Tab 1-6 的完整程式碼 (與之前版本相同)
-# ...
-
-# 這裡只展示完整的 Tab 1 作為範例，請確保 Tab 2-6 也在其中
+# 分頁 1: 個股詳細分析
 with tab1:
     if selected_code:
-        stock_name = st.session_state.watchlist.get(selected_code, selected_code)
         data, ticker_obj = get_stock_data(selected_code, lookback_bars, yf_interval)
         if not data.empty:
             df = calculate_indicators(data)
@@ -323,9 +337,11 @@ with tab1:
             latest = df.iloc[-1]
             pe, div, yoy, qoq, yoy_c, qoq_c = get_fundamentals(ticker_obj)
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
-            st.subheader(f"{stock_name} ({selected_code}) - {timeframe}分析")
+            st.subheader(f"{stock_name} ({selected_code}) - {timeframe}技術分析")
+            
+            # 如果有即時報價，這裡顯示的收盤價會是 Yahoo 的 (延遲)，所以我們可以保留原本的邏輯
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("收盤價", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
+            c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
             c2.metric("成交量", f"{int(latest['Volume']/1000)} 張", f"{int((latest['Volume']-df.iloc[-2]['Volume'])/1000)} 張")
             macd_col = df.columns[df.columns.str.startswith('MACDh')][0]
             hist_val = latest[macd_col]
@@ -383,6 +399,9 @@ with tab1:
                 else: st.info("暫無相關新聞")
             except: st.warning("新聞載入失敗。")
 
+# 分頁 2~6 略 (保持 V14.0/V16.0 內容)
+# ... (請複製貼上 Tab 2-6) ...
+# 這裡省略 Tab 2-6 以節省篇幅，請務必從上一個版本複製回來！
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
     if st.button("🚀 掃描觀察名單"):
@@ -461,7 +480,6 @@ with tab3:
             progress.progress((i+1)/total_scan)
         progress.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
-
     if st.session_state.scan_result_tab3 is not None and not st.session_state.scan_result_tab3.empty:
         rev_df = st.session_state.scan_result_tab3
         st.success(f"發現 {len(rev_df)} 檔潛在轉折股！")
@@ -625,86 +643,55 @@ with tab6:
         importance_df = importance_df.sort_values(by="重要性", ascending=False)
         col2.dataframe(importance_df, use_container_width=True, hide_index=True)
 
-# ==========================================
-# V17.0 分頁 7: 籌碼與股權 (新增當沖/波段切換)
-# ==========================================
+# V17.0 分頁 7: 籌碼與股權 (V17.1 修復+強化版)
 with tab7:
     st.subheader("🕵️‍♂️ 籌碼與股權透視 - 追蹤大戶動向")
     target_name = st.session_state.watchlist.get(selected_code, selected_code)
     st.info(f"目前分析標的：**{target_name} ({selected_code})**")
     
-    # V17.0: 切換模式 (波段 vs 當沖)
+    # 切換模式
     chip_mode = st.radio("📊 選擇分析模式", ["📅 波段籌碼 (60日趨勢)", "⚡ 當沖籌碼 (今日 5分K)"], horizontal=True)
     
-    # 根據模式設定參數
     if "波段" in chip_mode:
-        c_interval = "1d"
-        c_days = 100 # 抓足夠資料算指標
-        c_view = 60
-        c_title = "近期主力籌碼動能 (近60日)"
+        c_interval = "1d"; c_days = 100; c_view = 60; c_title = "近期主力籌碼動能 (近60日)"
     else:
-        c_interval = "5m" # 5分鐘線
-        c_days = 5 # 抓最近5天
-        c_view = 100 # 顯示最近100根K棒(大約是一天的量)
-        c_title = "當日即時籌碼動能 (5分K)"
+        c_interval = "5m"; c_days = 5; c_view = 100; c_title = "當日即時籌碼動能 (5分K)"
 
-    # 抓取數據
     data_chip, _ = get_stock_data(selected_code, c_days, interval=c_interval)
     
     if not data_chip.empty:
         data_chip = calculate_indicators(data_chip)
-        
-        # V17.0: 當沖模式下，計算 VWAP (僅限於有足夠資料時)
         if "當沖" in chip_mode:
-            try:
-                # pandas_ta 的 vwap 需要 datetime index
-                data_chip['VWAP'] = ta.vwap(data_chip['High'], data_chip['Low'], data_chip['Close'], data_chip['Volume'])
+            try: data_chip['VWAP'] = ta.vwap(data_chip['High'], data_chip['Low'], data_chip['Close'], data_chip['Volume'])
             except: pass
 
         df_view = data_chip.tail(c_view)
+        if c_interval == "1d": df_view.index = df_view.index.strftime('%Y-%m-%d')
+        else: df_view.index = df_view.index.strftime('%m-%d %H:%M')
         
-        # 強制轉字串以移除空隙 (V16.4 修正)
-        if c_interval == "1d":
-            df_view.index = df_view.index.strftime('%Y-%m-%d')
-        else:
-            df_view.index = df_view.index.strftime('%m-%d %H:%M') # 當沖顯示時間
-        
-        # 只有波段模式才顯示 AI 總結
         if "波段" in chip_mode:
             st.markdown("### 🤖 艾倫杭特・籌碼AI診斷")
             price_trend = df_view.iloc[-1]['Close'] - df_view.iloc[0]['Close']
             obv_trend = df_view.iloc[-1]['OBV'] - df_view.iloc[0]['OBV']
             c_sum1, c_sum2 = st.columns(2)
             c_sum1.metric("區間股價漲跌", f"{round(price_trend, 2)}", delta_color="normal" if price_trend > 0 else "inverse")
-            c_sum1.metric("區間 OBV 變化", f"{int(obv_trend)}", delta="資金流入" if obv_trend > 0 else "資金流出", delta_color="normal" if obv_trend > 0 else "inverse")
-            
+            c_sum1.metric("區間 OBV 變化", f"{int(obv_trend)}", delta="大戶進貨" if obv_trend > 0 else "大戶出貨", delta_color="normal" if obv_trend > 0 else "inverse")
             if price_trend < 0 and obv_trend > 0: st.success("🔥 **主力背離吸籌**：股價跌但籌碼增加，關注低接機會。")
             elif price_trend > 0 and obv_trend > 0: st.success("✅ **量價齊揚**：趨勢健康。")
             elif price_trend > 0 and obv_trend < 0: st.error("⚠️ **主力背離出貨**：股價漲但籌碼流出，小心回檔。")
             else: st.warning("❌ **量價同步殺盤**：趨勢偏空。")
 
-        # 繪圖
         st.markdown(f"### 🐋 {c_title}")
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.4])
-        
-        # K線
         fig.add_trace(go.Candlestick(x=df_view.index, open=df_view['Open'], high=df_view['High'], low=df_view['Low'], close=df_view['Close'], name='股價', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
-        
-        # V17.0: 當沖模式加畫 VWAP (均價線)
         if "當沖" in chip_mode and 'VWAP' in df_view.columns:
             fig.add_trace(go.Scatter(x=df_view.index, y=df_view['VWAP'], line=dict(color='purple', width=2, dash='dot'), name='VWAP (當日均價)'), row=1, col=1)
-
-        # 下圖指標
         fig.add_trace(go.Scatter(x=df_view.index, y=df_view['OBV'], line=dict(color='orange', width=2), name='OBV (能量潮)'), row=2, col=1)
         fig.add_trace(go.Scatter(x=df_view.index, y=df_view['AD'], line=dict(color='cyan', width=2, dash='dot'), name='A/D Line (累積派發)'), row=2, col=1)
-        
-        fig.update_xaxes(type='category', dtick=10 if c_interval=="1d" else 6) # 當沖刻度稍微密一點
+        fig.update_xaxes(type='category', dtick=10 if c_interval=="1d" else 6)
         fig.update_layout(height=600, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
-        
-        if "當沖" in chip_mode:
-            st.info("💡 **當沖心法**：股價站穩 **VWAP (紫色虛線)** 之上且 **OBV 向上**，為強勢多方格局；反之則偏空。")
-
+        if "當沖" in chip_mode: st.info("💡 **當沖心法**：股價站穩 **VWAP (紫色虛線)** 之上且 **OBV 向上**，為強勢多方格局；反之則偏空。")
     else: st.error("無法取得籌碼數據 (可能是盤前或資料源延遲)。")
 
     st.markdown("---")
