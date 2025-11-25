@@ -11,11 +11,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 import os
 import feedparser
-import twstock # V17.1 新增
+import twstock
+import time # V17.2 新增
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V17.1", layout="wide")
-st.title("📈 艾倫杭特 V17.1 - 即時報價戰情版")
+st.set_page_config(page_title="艾倫杭特 V17.2", layout="wide")
+st.title("📈 艾倫杭特 V17.2 - 即時報價刷新版")
 
 # ==========================================
 # 🔑 LINE 設定區
@@ -83,7 +84,7 @@ STOCK_NAMES = {
     "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
 }
 
-# --- State ---
+# --- 1. 初始化 Session State ---
 if 'watchlist' not in st.session_state: st.session_state.watchlist = load_watchlist()
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
@@ -99,10 +100,10 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     if new_code not in st.session_state.watchlist:
         st.session_state.watchlist[new_code] = new_name; save_watchlist(st.session_state.watchlist)
     st.session_state.sb_selected_code = new_code
-    st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
+    st.toast(f"✅ 已鎖定：{new_name} ({new_code})，請查看儀表板", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (略) ---
+# --- 0. 內建熱門產業清單 ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -164,11 +165,11 @@ interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
 lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 150)
 
-# --- V17.1 新增：即時報價函數 (Real-time) ---
+# --- V17.2 新增：即時報價函數 (含錯誤處理) ---
 def get_realtime_quote(code):
     try:
         stock = twstock.realtime.get(code)
-        if stock['success']:
+        if stock and stock['success']:
             return {
                 "price": float(stock['realtime']['latest_trade_price']),
                 "high": float(stock['realtime']['high']),
@@ -184,7 +185,7 @@ def get_stock_data(symbol, bars=200, interval="1d"):
     ticker = f"{symbol}.TW"; stock = yf.Ticker(ticker)
     if interval == "1d": period_str = f"{bars + 200}d"
     elif interval == "1wk": period_str = "5y"
-    elif interval == "5m": period_str = "5d" # 當沖用
+    elif interval == "5m": period_str = "5d"
     else: period_str = "max"
     df = stock.history(period=period_str, interval=interval) 
     if df.empty: ticker = f"{symbol}.TWO"; stock = yf.Ticker(ticker); df = stock.history(period=period_str, interval=interval)
@@ -204,7 +205,7 @@ def calculate_indicators(df):
     k_d = ta.stoch(df['High'], df['Low'], df['Close']); df = pd.concat([df, k_d], axis=1)
     bb = ta.bbands(df['Close'], length=20, std=2); df = pd.concat([df, bb], axis=1)
     df['RSI'] = ta.rsi(df['Close'], length=14); df['OBV'] = ta.obv(df['Close'], df['Volume']); df['AD'] = ta.ad(df['High'], df['Low'], df['Close'], df['Volume'])
-    try: df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume']) # V17.0
+    try: df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume']) 
     except: pass
     return df
 
@@ -306,21 +307,27 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
-# --- V17.1: 即時報價看板 (Header) ---
+# --- V17.2: 即時報價看板 (Header) ---
 stock_name = st.session_state.watchlist.get(selected_code, selected_code)
-rt_data = get_realtime_quote(selected_code)
-
-if rt_data:
+c_head1, c_head2 = st.columns([3, 1])
+with c_head1:
     st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
+with c_head2:
+    # 手動刷新按鈕 (強制 Rerun)
+    if st.button("🔄 立即更新報價"):
+        st.rerun()
+
+# 嘗試抓取即時報價
+rt_data = get_realtime_quote(selected_code)
+if rt_data:
     r1, r2, r3, r4 = st.columns(4)
     r1.metric("成交價 (Real-time)", f"{rt_data['price']}", f"資料時間: {rt_data['time']}")
     r2.metric("開盤", rt_data['open'])
     r3.metric("最高", rt_data['high'])
     r4.metric("最低", rt_data['low'])
-    st.caption("⚠️ 注意：上方為 twstock 抓取的證交所即時快照。下方圖表仍使用 Yahoo Finance (延遲 20分)。")
+    st.caption("✅ 上方為 TWSE 證交所即時連線數據。")
 else:
-    # 如果 twstock 抓不到 (可能盤後或 IP 限制)，顯示一般標題
-    pass 
+    st.warning("⚠️ 暫時無法取得證交所即時連線 (可能為盤後或 IP 限制)，下方圖表仍可參考 Yahoo 延遲數據。")
 
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
@@ -338,8 +345,6 @@ with tab1:
             pe, div, yoy, qoq, yoy_c, qoq_c = get_fundamentals(ticker_obj)
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
             st.subheader(f"{stock_name} ({selected_code}) - {timeframe}技術分析")
-            
-            # 如果有即時報價，這裡顯示的收盤價會是 Yahoo 的 (延遲)，所以我們可以保留原本的邏輯
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
             c2.metric("成交量", f"{int(latest['Volume']/1000)} 張", f"{int((latest['Volume']-df.iloc[-2]['Volume'])/1000)} 張")
@@ -399,11 +404,9 @@ with tab1:
                 else: st.info("暫無相關新聞")
             except: st.warning("新聞載入失敗。")
 
-# 分頁 2~6 略 (保持 V14.0/V16.0 內容)
-# ... (請複製貼上 Tab 2-6) ...
-# 這裡省略 Tab 2-6 以節省篇幅，請務必從上一個版本複製回來！
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
+    st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
     if st.button("🚀 掃描觀察名單"):
         scan_results = []
         progress_bar = st.progress(0)
@@ -435,7 +438,10 @@ with tab2:
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
             msg = "🤖 【觀察名單掃描報告】\n"
             for index, row in res_df.iterrows():
-                if row['KD金叉'] == '✅' or row['量能爆發'] == '🔥': msg += f"{row['名稱']} ({row['代號']}): {row['漲幅%']}%\n"
+                if row['KD金叉'] == '✅' or row['量能爆發'] == '🔥':
+                    msg += f"{row['名稱']} ({row['代號']}): {row['漲幅%']}%\n"
+                    if row['KD金叉'] == '✅': msg += "  - ✨ KD金叉\n"
+                    if row['量能爆發'] == '🔥': msg += "  - 🔥 量能爆發\n"
             if len(msg) > 20: send_line_message(msg)
         event = st.dataframe(res_df.style.applymap(lambda x: 'color: red' if isinstance(x, float) and x > 0 else 'color: green' if isinstance(x, float) and x < 0 else '', subset=['漲幅%']), column_config={"收盤價": st.column_config.NumberColumn(format="%.2f"), "漲幅%": st.column_config.NumberColumn(format="%.2f%%")}, use_container_width=True, height=500, on_select="rerun", selection_mode="single-row")
         if event.selection.rows:
@@ -480,6 +486,7 @@ with tab3:
             progress.progress((i+1)/total_scan)
         progress.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
+
     if st.session_state.scan_result_tab3 is not None and not st.session_state.scan_result_tab3.empty:
         rev_df = st.session_state.scan_result_tab3
         st.success(f"發現 {len(rev_df)} 檔潛在轉折股！")
@@ -487,6 +494,7 @@ with tab3:
             msg = f"🔥 【轉折獵人】發現 {len(rev_df)} 檔潛力股\n板塊：{target_sector}\n"
             for index, row in rev_df.iterrows(): msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n"
             send_line_message(msg)
+
         event = st.dataframe(rev_df, column_config={"收盤價": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True, on_select="rerun", selection_mode="single-row")
         if event.selection.rows:
             selected_index = event.selection.rows[0]
@@ -643,15 +651,12 @@ with tab6:
         importance_df = importance_df.sort_values(by="重要性", ascending=False)
         col2.dataframe(importance_df, use_container_width=True, hide_index=True)
 
-# V17.0 分頁 7: 籌碼與股權 (V17.1 修復+強化版)
 with tab7:
     st.subheader("🕵️‍♂️ 籌碼與股權透視 - 追蹤大戶動向")
     target_name = st.session_state.watchlist.get(selected_code, selected_code)
     st.info(f"目前分析標的：**{target_name} ({selected_code})**")
     
-    # 切換模式
     chip_mode = st.radio("📊 選擇分析模式", ["📅 波段籌碼 (60日趨勢)", "⚡ 當沖籌碼 (今日 5分K)"], horizontal=True)
-    
     if "波段" in chip_mode:
         c_interval = "1d"; c_days = 100; c_view = 60; c_title = "近期主力籌碼動能 (近60日)"
     else:
