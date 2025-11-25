@@ -7,3 +7,4 @@ scikit-learn
 feedparser
 twstock
 lxml
+fugle-marketdata
