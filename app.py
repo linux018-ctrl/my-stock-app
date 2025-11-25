@@ -12,11 +12,11 @@ from sklearn.metrics import accuracy_score
 import os
 import feedparser
 import twstock
-import time
+import time # 用來控制請求速度
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V17.3", layout="wide")
-st.title("📈 艾倫杭特 V17.3 - 穩定修復版")
+st.set_page_config(page_title="艾倫杭特 V17.4", layout="wide")
+st.title("📈 艾倫杭特 V17.4 - 防封鎖穩定版")
 
 # ==========================================
 # 🔑 LINE 設定區
@@ -130,7 +130,7 @@ SECTOR_DICT = {
     "你的觀察名單": [] 
 }
 
-# --- 側邊欄 ---
+# --- 側邊欄：名單管理 ---
 st.sidebar.header("📝 觀察名單管理")
 with st.sidebar.expander("新增/移除個股"):
     def auto_fill_name():
@@ -165,7 +165,7 @@ interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
 lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 150)
 
-# --- 核心功能區 (即時報價) ---
+# --- V17.2: 即時報價 ---
 def get_realtime_quote(code):
     try:
         stock = twstock.realtime.get(code)
@@ -180,6 +180,7 @@ def get_realtime_quote(code):
     except: return None
     return None
 
+# --- 核心功能區 ---
 def get_stock_data(symbol, bars=200, interval="1d"):
     ticker = f"{symbol}.TW"; stock = yf.Ticker(ticker)
     if interval == "1d": period_str = f"{bars + 200}d"
@@ -306,21 +307,19 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
-# --- 即時報價看板 ---
+# --- Header: 即時報價 ---
 stock_name = st.session_state.watchlist.get(selected_code, selected_code)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
 with c_head2:
     if st.button("🔄 立即更新報價"): st.rerun()
-
 rt_data = get_realtime_quote(selected_code)
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
     r1.metric("成交價 (Real-time)", f"{rt_data['price']}", f"資料時間: {rt_data['time']}")
     r2.metric("開盤", rt_data['open']); r3.metric("最高", rt_data['high']); r4.metric("最低", rt_data['low'])
     st.caption("✅ 上方為 TWSE 證交所即時連線數據。")
-else:
-    st.warning("⚠️ 暫時無法取得證交所即時連線 (可能為盤後或 IP 限制)，下方圖表仍可參考 Yahoo 延遲數據。")
+else: st.warning("⚠️ 暫時無法取得證交所即時連線 (可能為盤後或 IP 限制)，下方圖表仍可參考 Yahoo 延遲數據。")
 
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
@@ -405,9 +404,12 @@ with tab2:
         stocks_list = list(st.session_state.watchlist.items())
         total = len(stocks_list)
         for i, (code, name) in enumerate(stocks_list):
-            df_scan, _ = get_stock_data(code, 100, interval="1d")
-            if not df_scan.empty:
-                try:
+            # V17.4: 強制睡眠 0.5秒以避免 RateLimitError
+            time.sleep(0.5)
+            # V17.4: 加入 try-except 確保單一股票失敗不影響整體
+            try:
+                df_scan, _ = get_stock_data(code, 100, interval="1d")
+                if not df_scan.empty:
                     df_scan = calculate_indicators(df_scan)
                     latest = df_scan.iloc[-1]; prev = df_scan.iloc[-2]
                     cond_above_ma20 = latest['Close'] > latest['SMA20']
@@ -419,11 +421,10 @@ with tab2:
                     cond_macd = latest[macd_col] > 0
                     cond_align = latest['SMA5'] > latest['SMA20'] > latest['SMA60']
                     scan_results.append({"代號": code, "名稱": name, "收盤價": latest['Close'], "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, "站上月線": "✅" if cond_above_ma20 else "❌", "量能爆發": "🔥" if cond_volume else "➖", "KD金叉": "✅" if cond_kd_gold else "➖", "MACD多頭": "✅" if cond_macd else "➖", "均線排列": "🌟" if cond_align else "➖"})
-                except: pass
+            except Exception as e: pass
             progress_bar.progress((i+1)/total)
         progress_bar.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
-
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
@@ -451,9 +452,11 @@ with tab3:
         progress = st.progress(0)
         total_scan = len(scan_list)
         for i, code in enumerate(scan_list):
-            df_s, _ = get_stock_data(code, 120, interval="1d")
-            if not df_s.empty:
-                try:
+            # V17.4: 加入延遲
+            time.sleep(0.5)
+            try:
+                df_s, _ = get_stock_data(code, 120, interval="1d")
+                if not df_s.empty:
                     df_s = calculate_indicators(df_s)
                     curr = df_s.iloc[-1]; prev = df_s.iloc[-2]
                     is_above_ma20 = curr['Close'] > curr['SMA20']
@@ -470,7 +473,7 @@ with tab3:
                     if score >= 1:
                         name = st.session_state.watchlist.get(code, STOCK_NAMES.get(code, code))
                         reversal_stocks.append({"代號": code, "名稱": name, "收盤價": curr['Close'], "訊號強度": "⭐⭐⭐" if score >= 2 else "⭐", "觸發條件": " + ".join(reasons), "KD值": f"{int(curr[k_col])}", "季線乖離": f"{round(((curr['Close'] - curr['SMA60'])/curr['SMA60'])*100, 1)}%"})
-                except: pass
+            except: pass
             progress.progress((i+1)/total_scan)
         progress.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
@@ -479,7 +482,7 @@ with tab3:
         st.success(f"發現 {len(rev_df)} 檔潛在轉折股！")
         if st.button("📤 將轉折清單傳送到 LINE (Tab3)"):
             msg = f"🔥 【轉折獵人】發現 {len(rev_df)} 檔潛力股\n板塊：{target_sector}\n"
-            for index, row in rev_df.iterrows(): msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n"
+            for index, row in rev_df.iterrows(): msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n   理由：{row['觸發條件']}\n"
             send_line_message(msg)
         event = st.dataframe(rev_df, column_config={"收盤價": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True, on_select="rerun", selection_mode="single-row")
         if event.selection.rows:
@@ -503,6 +506,8 @@ with tab4:
         total_scan = len(scan_list_f)
         for i, code in enumerate(scan_list_f):
             status.text(f"正在分析財報：{code}...")
+            # V17.4: 加入延遲
+            time.sleep(0.5)
             try:
                 t_obj = yf.Ticker(f"{code}.TW")
                 is_3_up, metrics = check_three_rates(t_obj)
@@ -526,6 +531,10 @@ with tab4:
                 st.session_state.pending_update = {"code": clicked_code, "name": clicked_name}
                 st.rerun()
     elif st.session_state.scan_result_tab4 is not None: st.info("可惜，沒有發現三率三升的股票。")
+
+# Tab 5, 6, 7 (保持 V16.4 / V17.0 內容)
+# ... (請將 V16.4 的 Tab 5, 6, 7 完整程式碼複製到此處，無需變更) ...
+# 為確保完整性，以下附上 Tab 5, 6, 7
 
 with tab5:
     st.subheader("🧪 策略回測實驗室 - 驗證你的交易策略")
@@ -605,7 +614,7 @@ with tab5:
 
 with tab6:
     st.subheader("🔮 AI 趨勢預測 (Random Forest)")
-    st.markdown("""**原理：** 利用機器學習模型，分析過去的 **收盤價、成交量、RSI、MACD** 與隔日漲跌的關係，預測明日走勢。""")
+    st.markdown("""**原理：** 利用機器學習模型...""")
     if st.button("🧠 啟動 AI 模型運算"):
         target_name = st.session_state.watchlist.get(selected_code, selected_code)
         df_ai, _ = get_stock_data(selected_code, 0, interval="1d")
@@ -638,25 +647,20 @@ with tab7:
     st.subheader("🕵️‍♂️ 籌碼與股權透視 - 追蹤大戶動向")
     target_name = st.session_state.watchlist.get(selected_code, selected_code)
     st.info(f"目前分析標的：**{target_name} ({selected_code})**")
-    
     chip_mode = st.radio("📊 選擇分析模式", ["📅 波段籌碼 (60日趨勢)", "⚡ 當沖籌碼 (今日 5分K)"], horizontal=True)
     if "波段" in chip_mode:
         c_interval = "1d"; c_days = 100; c_view = 60; c_title = "近期主力籌碼動能 (近60日)"
     else:
         c_interval = "5m"; c_days = 5; c_view = 100; c_title = "當日即時籌碼動能 (5分K)"
-
     data_chip, _ = get_stock_data(selected_code, c_days, interval=c_interval)
-    
     if not data_chip.empty:
         data_chip = calculate_indicators(data_chip)
         if "當沖" in chip_mode:
             try: data_chip['VWAP'] = ta.vwap(data_chip['High'], data_chip['Low'], data_chip['Close'], data_chip['Volume'])
             except: pass
-
         df_view = data_chip.tail(c_view)
         if c_interval == "1d": df_view.index = df_view.index.strftime('%Y-%m-%d')
         else: df_view.index = df_view.index.strftime('%m-%d %H:%M')
-        
         if "波段" in chip_mode:
             st.markdown("### 🤖 艾倫杭特・籌碼AI診斷")
             price_trend = df_view.iloc[-1]['Close'] - df_view.iloc[0]['Close']
@@ -668,7 +672,6 @@ with tab7:
             elif price_trend > 0 and obv_trend > 0: st.success("✅ **量價齊揚**：趨勢健康。")
             elif price_trend > 0 and obv_trend < 0: st.error("⚠️ **主力背離出貨**：股價漲但籌碼流出，小心回檔。")
             else: st.warning("❌ **量價同步殺盤**：趨勢偏空。")
-
         st.markdown(f"### 🐋 {c_title}")
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.4])
         fig.add_trace(go.Candlestick(x=df_view.index, open=df_view['Open'], high=df_view['High'], low=df_view['Low'], close=df_view['Close'], name='股價', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
@@ -681,7 +684,6 @@ with tab7:
         st.plotly_chart(fig, use_container_width=True)
         if "當沖" in chip_mode: st.info("💡 **當沖心法**：股價站穩 **VWAP (紫色虛線)** 之上且 **OBV 向上**，為強勢多方格局；反之則偏空。")
     else: st.error("無法取得籌碼數據 (可能是盤前或資料源延遲)。")
-
     st.markdown("---")
     st.markdown("### 🚀 外部籌碼傳送門")
     c_link1, c_link2, c_link3 = st.columns(3)
