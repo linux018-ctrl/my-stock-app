@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V18.4", layout="wide")
-st.title("📈 艾倫杭特 V18.4 - 結構強化穩定版")
+st.set_page_config(page_title="艾倫杭特 V18.5", layout="wide")
+st.title("📈 艾倫杭特 V18.5 - 報價全顯示版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -145,8 +145,7 @@ with st.sidebar.expander("新增/移除個股"):
     def auto_fill_name():
         code = st.session_state.input_code
         if code:
-            if code in STOCK_NAMES:
-                st.session_state.input_name = STOCK_NAMES[code]
+            if code in STOCK_NAMES: st.session_state.input_name = STOCK_NAMES[code]
             else:
                 try:
                     t = yf.Ticker(f"{code}.TW"); name = t.info.get('longName') or t.info.get('shortName')
@@ -175,7 +174,7 @@ interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
 lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 150)
 
-# --- V18.2: 安全數值讀取 helper ---
+# --- V18.5: 安全數值讀取 helper (修正報價缺失) ---
 def safe_float(val):
     try: return float(val)
     except: return None
@@ -187,16 +186,22 @@ def get_realtime_quote_fugle(code):
         quote = stock.intraday.quote(symbol=code)
         raw_json = quote
         if quote:
+            # 優先讀取 lastTrade.price
             price = safe_float(quote.get('lastTrade', {}).get('price'))
+            # 如果沒有，嘗試讀取 trade.price
             if price is None: price = safe_float(quote.get('trade', {}).get('price'))
+            
             change = safe_float(quote.get('change'))
             pct_change = 0
             if price is not None and change is not None:
                 prev_close = price - change
                 if prev_close > 0: pct_change = (change / prev_close) * 100
-            open_p = safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open'))
-            high_p = safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high'))
-            low_p = safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low'))
+            
+            # V18.5 修正：增加對 total 的查找，並保留原本邏輯
+            open_p = safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open')) or safe_float(quote.get('total', {}).get('open'))
+            high_p = safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high')) or safe_float(quote.get('total', {}).get('high'))
+            low_p = safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low')) or safe_float(quote.get('total', {}).get('low'))
+            
             time_str = quote.get('lastUpdated')
             try:
                 dt_object = datetime.fromtimestamp(time_str / 1000000)
@@ -373,7 +378,11 @@ with tab1:
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
             st.subheader(f"{stock_name} ({selected_code}) - {timeframe}技術分析")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
+            # V18.5 修正：確保 Fugle 價格優先
+            if rt_data and rt_data.get('price') is not None:
+                c1.metric("目前股價 (Fugle)", rt_data['price'], rt_data['change'])
+            else:
+                c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
             c2.metric("成交量", f"{int(latest['Volume']/1000)} 張", f"{int((latest['Volume']-df.iloc[-2]['Volume'])/1000)} 張")
             macd_col = df.columns[df.columns.str.startswith('MACDh')][0]
             hist_val = latest[macd_col]
@@ -431,7 +440,6 @@ with tab1:
                 else: st.info("暫無相關新聞")
             except: st.warning("新聞載入失敗。")
 
-# 分頁 2: 觀察名單掃描器
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
     st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
@@ -441,35 +449,22 @@ with tab2:
         stocks_list = list(st.session_state.watchlist.items())
         total = len(stocks_list)
         for i, (code, name) in enumerate(stocks_list):
-            time.sleep(0.5)
-            try:
-                df_scan, _ = get_stock_data(code, 100, interval="1d")
-                if not df_scan.empty:
-                    try:
-                        df_scan = calculate_indicators(df_scan)
-                        latest = df_scan.iloc[-1]
-                        prev = df_scan.iloc[-2]
-                        cond_above_ma20 = latest['Close'] > latest['SMA20']
-                        cond_volume = latest['Volume'] > latest['Vol_SMA5']
-                        k_col = df_scan.columns[df_scan.columns.str.startswith('STOCHk')][0]
-                        d_col = df_scan.columns[df_scan.columns.str.startswith('STOCHd')][0]
-                        cond_kd_gold = latest[k_col] > latest[d_col] and prev[k_col] < prev[d_col]
-                        macd_col = df_scan.columns[df_scan.columns.str.startswith('MACDh')][0]
-                        cond_macd = latest[macd_col] > 0
-                        cond_align = latest['SMA5'] > latest['SMA20'] > latest['SMA60']
-                        # V18.4: 拆解長代碼
-                        item = {
-                            "代號": code, "名稱": name, "收盤價": latest['Close'], 
-                            "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, 
-                            "站上月線": "✅" if cond_above_ma20 else "❌", 
-                            "量能爆發": "🔥" if cond_volume else "➖", 
-                            "KD金叉": "✅" if cond_kd_gold else "➖", 
-                            "MACD多頭": "✅" if cond_macd else "➖", 
-                            "均線排列": "🌟" if cond_align else "➖"
-                        }
-                        scan_results.append(item)
-                    except: pass
-            except Exception as e: pass
+            df_scan, _ = get_stock_data(code, 100, interval="1d")
+            if not df_scan.empty:
+                try:
+                    df_scan = calculate_indicators(df_scan)
+                    latest = df_scan.iloc[-1]
+                    prev = df_scan.iloc[-2]
+                    cond_above_ma20 = latest['Close'] > latest['SMA20']
+                    cond_volume = latest['Volume'] > latest['Vol_SMA5']
+                    k_col = df_scan.columns[df_scan.columns.str.startswith('STOCHk')][0]
+                    d_col = df_scan.columns[df_scan.columns.str.startswith('STOCHd')][0]
+                    cond_kd_gold = latest[k_col] > latest[d_col] and prev[k_col] < prev[d_col]
+                    macd_col = df_scan.columns[df_scan.columns.str.startswith('MACDh')][0]
+                    cond_macd = latest[macd_col] > 0
+                    cond_align = latest['SMA5'] > latest['SMA20'] > latest['SMA60']
+                    scan_results.append({"代號": code, "名稱": name, "收盤價": latest['Close'], "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, "站上月線": "✅" if cond_above_ma20 else "❌", "量能爆發": "🔥" if cond_volume else "➖", "KD金叉": "✅" if cond_kd_gold else "➖", "MACD多頭": "✅" if cond_macd else "➖", "均線排列": "🌟" if cond_align else "➖"})
+                except: pass
             progress_bar.progress((i+1)/total)
         progress.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
@@ -491,7 +486,6 @@ with tab2:
                 st.rerun()
     elif st.session_state.scan_result_tab2 is not None: st.info("無資料")
 
-# 分頁 3: 轉折獵人
 with tab3:
     st.subheader("🔥 Goodinfo 風格 - 轉折獵人")
     target_sector = st.selectbox("請選擇掃描分類", options=list(SECTOR_DICT.keys()))
@@ -502,39 +496,26 @@ with tab3:
         progress = st.progress(0)
         total_scan = len(scan_list)
         for i, code in enumerate(scan_list):
-            time.sleep(0.5)
-            try:
-                df_s, _ = get_stock_data(code, 120, interval="1d")
-                if not df_s.empty:
-                    try:
-                        df_s = calculate_indicators(df_s)
-                        curr = df_s.iloc[-1]; prev = df_s.iloc[-2]
-                        is_above_ma20 = curr['Close'] > curr['SMA20']
-                        k_col = df_s.columns[df_s.columns.str.startswith('STOCHk')][0]
-                        d_col = df_s.columns[df_s.columns.str.startswith('STOCHd')][0]
-                        is_kd_cross = (curr[k_col] > curr[d_col]) and (prev[k_col] < prev[d_col]) and (curr[k_col] < 50)
-                        macd_col = df_s.columns[df_s.columns.str.startswith('MACDh')][0]
-                        is_macd_turning = curr[macd_col] > prev[macd_col]
-                        is_break_ma60 = (curr['Close'] > curr['SMA60']) and (prev['Close'] < prev['SMA60'])
-                        score = 0; reasons = []
-                        if is_kd_cross: score += 1; reasons.append("KD低檔金叉")
-                        if is_break_ma60: score += 1; reasons.append("突破季線")
-                        if is_above_ma20 and is_macd_turning: score += 1; reasons.append("站穩月線+動能")
-                        if score >= 1:
-                            name = st.session_state.watchlist.get(code, STOCK_NAMES.get(code, code))
-                            # V18.4: 拆解長代碼
-                            item = {
-                                "代號": code, 
-                                "名稱": name, 
-                                "收盤價": curr['Close'], 
-                                "訊號強度": "⭐⭐⭐" if score >= 2 else "⭐", 
-                                "觸發條件": " + ".join(reasons), 
-                                "KD值": f"{int(curr[k_col])}", 
-                                "季線乖離": f"{round(((curr['Close'] - curr['SMA60'])/curr['SMA60'])*100, 1)}%"
-                            }
-                            reversal_stocks.append(item)
-                    except: pass
-            except: pass
+            df_s, _ = get_stock_data(code, 120, interval="1d")
+            if not df_s.empty:
+                try:
+                    df_s = calculate_indicators(df_s)
+                    curr = df_s.iloc[-1]; prev = df_s.iloc[-2]
+                    is_above_ma20 = curr['Close'] > curr['SMA20']
+                    k_col = df_s.columns[df_s.columns.str.startswith('STOCHk')][0]
+                    d_col = df_s.columns[df_s.columns.str.startswith('STOCHd')][0]
+                    is_kd_cross = (curr[k_col] > curr[d_col]) and (prev[k_col] < prev[d_col]) and (curr[k_col] < 50)
+                    macd_col = df_s.columns[df_s.columns.str.startswith('MACDh')][0]
+                    is_macd_turning = curr[macd_col] > prev[macd_col]
+                    is_break_ma60 = (curr['Close'] > curr['SMA60']) and (prev['Close'] < prev['SMA60'])
+                    score = 0; reasons = []
+                    if is_kd_cross: score += 1; reasons.append("KD低檔金叉")
+                    if is_break_ma60: score += 1; reasons.append("突破季線")
+                    if is_above_ma20 and is_macd_turning: score += 1; reasons.append("站穩月線+動能")
+                    if score >= 1:
+                        name = st.session_state.watchlist.get(code, STOCK_NAMES.get(code, code))
+                        reversal_stocks.append({"代號": code, "名稱": name, "收盤價": curr['Close'], "訊號強度": "⭐⭐⭐" if score >= 2 else "⭐", "觸發條件": " + ".join(reasons), "KD值": f"{int(curr[k_col])}", "季線乖離": f"{round(((curr['Close'] - curr['SMA60'])/curr['SMA60'])*100, 1)}%"})
+                except: pass
             progress.progress((i+1)/total_scan)
         progress.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
@@ -546,6 +527,7 @@ with tab3:
             msg = f"🔥 【轉折獵人】發現 {len(rev_df)} 檔潛力股\n板塊：{target_sector}\n"
             for index, row in rev_df.iterrows(): msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n   理由：{row['觸發條件']}\n"
             send_line_message(msg)
+
         event = st.dataframe(rev_df, column_config={"收盤價": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True, on_select="rerun", selection_mode="single-row")
         if event.selection.rows:
             selected_index = event.selection.rows[0]
@@ -568,18 +550,12 @@ with tab4:
         total_scan = len(scan_list_f)
         for i, code in enumerate(scan_list_f):
             status.text(f"正在分析財報：{code}...")
-            time.sleep(0.5)
             try:
                 t_obj = yf.Ticker(f"{code}.TW")
                 is_3_up, metrics = check_three_rates(t_obj)
                 if is_3_up:
                     name = st.session_state.watchlist.get(code, STOCK_NAMES.get(code, code))
-                    # V18.4: 拆解長代碼
-                    item = {
-                        "代號": code, "名稱": name, 
-                        "毛利率": metrics['gm'], "營益率": metrics['om'], "淨利率": metrics['nm']
-                    }
-                    fund_results.append(item)
+                    fund_results.append({"代號": code, "名稱": name, "毛利率": metrics['gm'], "營益率": metrics['om'], "淨利率": metrics['nm']})
             except: pass
             progress.progress((i+1)/total_scan)
         progress.empty()
@@ -598,9 +574,6 @@ with tab4:
                 st.rerun()
     elif st.session_state.scan_result_tab4 is not None: st.info("可惜，沒有發現三率三升的股票。")
 
-# Tab 5, 6, 7 (保持 V16.4 內容，無需更動，請直接複製貼上)
-# ... (以下請貼上 V16.4 / V17.3 的 Tab 5, 6, 7 程式碼) ...
-
 with tab5:
     st.subheader("🧪 策略回測實驗室 - 驗證你的交易策略")
     STRATEGY_DESC = {
@@ -615,9 +588,7 @@ with tab5:
     period_map = {"1年 (短線)": "1y", "3年 (中線)": "3y", "5年 (長線)": "5y"}
     bb_thresh = 0.05
     if "布林" in bt_strategy or "狙擊" in bt_strategy: bb_thresh = col3.slider("布林乖離門檻", 0.01, 0.10, 0.05, 0.01, format="%.2f")
-    
     c_act1, c_act2 = st.columns([1, 2])
-    
     if c_act1.button("▶️ 開始回測 (單一策略)"):
         target_name = st.session_state.watchlist.get(selected_code, selected_code)
         st.write(f"正在回測：**{target_name} ({selected_code})** | 策略：{bt_strategy}...")
@@ -693,7 +664,6 @@ with tab6:
                 acc, pred, prob, importances, feature_names = train_and_predict_ai(df_ai)
             st.session_state.ai_data = {"target_name": target_name, "code": selected_code, "acc": acc, "pred": pred, "prob": prob, "importances": importances, "feature_names": feature_names}
         else: st.error("歷史資料不足，無法進行 AI 訓練。")
-
     if st.session_state.ai_data:
         ai = st.session_state.ai_data
         col1, col2 = st.columns(2)
