@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V18.5", layout="wide")
-st.title("📈 艾倫杭特 V18.5 - 報價全顯示版")
+st.set_page_config(page_title="艾倫杭特 V19.0", layout="wide")
+st.title("📈 艾倫杭特 V19.0 - 匯率連動戰情版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -112,7 +112,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT ---
+# --- SECTOR_DICT (略，保持 V16.0 內容) ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -145,7 +145,8 @@ with st.sidebar.expander("新增/移除個股"):
     def auto_fill_name():
         code = st.session_state.input_code
         if code:
-            if code in STOCK_NAMES: st.session_state.input_name = STOCK_NAMES[code]
+            if code in STOCK_NAMES:
+                st.session_state.input_name = STOCK_NAMES[code]
             else:
                 try:
                     t = yf.Ticker(f"{code}.TW"); name = t.info.get('longName') or t.info.get('shortName')
@@ -174,7 +175,7 @@ interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
 lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 150)
 
-# --- V18.5: 安全數值讀取 helper (修正報價缺失) ---
+# --- V18.2: 安全數值讀取 helper ---
 def safe_float(val):
     try: return float(val)
     except: return None
@@ -186,22 +187,16 @@ def get_realtime_quote_fugle(code):
         quote = stock.intraday.quote(symbol=code)
         raw_json = quote
         if quote:
-            # 優先讀取 lastTrade.price
             price = safe_float(quote.get('lastTrade', {}).get('price'))
-            # 如果沒有，嘗試讀取 trade.price
             if price is None: price = safe_float(quote.get('trade', {}).get('price'))
-            
             change = safe_float(quote.get('change'))
             pct_change = 0
             if price is not None and change is not None:
                 prev_close = price - change
                 if prev_close > 0: pct_change = (change / prev_close) * 100
-            
-            # V18.5 修正：增加對 total 的查找，並保留原本邏輯
-            open_p = safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open')) or safe_float(quote.get('total', {}).get('open'))
-            high_p = safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high')) or safe_float(quote.get('total', {}).get('high'))
-            low_p = safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low')) or safe_float(quote.get('total', {}).get('low'))
-            
+            open_p = safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open'))
+            high_p = safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high'))
+            low_p = safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low'))
             time_str = quote.get('lastUpdated')
             try:
                 dt_object = datetime.fromtimestamp(time_str / 1000000)
@@ -212,6 +207,19 @@ def get_realtime_quote_fugle(code):
                 "open": open_p, "high": high_p, "low": low_p, "time": time_str
             }, raw_json
     except Exception as e: return None, str(e)
+    return None, None
+
+# --- V19.0: 取得匯率 (USD/TWD) ---
+def get_usdtwd_rate():
+    try:
+        ticker = yf.Ticker("TWD=X") # Yahoo Finance 匯率代碼
+        data = ticker.history(period="2d") # 抓兩天以計算漲跌
+        if not data.empty:
+            rate = data['Close'].iloc[-1]
+            prev = data['Close'].iloc[-2]
+            change = rate - prev
+            return round(rate, 3), round(change, 3)
+    except: pass
     return None, None
 
 # --- 核心功能區 ---
@@ -340,12 +348,19 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
-# --- Header: 即時報價 ---
+# --- Header: 即時報價 + V19.0 匯率 ---
 stock_name = st.session_state.watchlist.get(selected_code, selected_code)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
 with c_head2:
     if st.button("🔄 立即更新報價"): st.rerun()
+
+# 顯示匯率 (V19.0)
+fx_rate, fx_change = get_usdtwd_rate()
+if fx_rate:
+    fx_color = "inverse" if fx_change > 0 else "normal" # 漲=紅=inverse(st.metric預設)
+    st.metric("🇺🇸 美元兌台幣 (USD/TWD)", f"{fx_rate}", f"{fx_change}", delta_color=fx_color)
+
 rt_data, raw_json = get_realtime_quote_fugle(selected_code)
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
@@ -364,7 +379,10 @@ with st.expander("🔍 [開發者模式] 查看 API 原始回傳資料 (Raw JSON
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
 
-# 分頁 1: 個股詳細分析
+# (以下 Tab 1~7 程式碼保持不變，為節省篇幅請參照 V18.4)
+# 請務必將 V18.4 的 Tabs 程式碼貼在這裡！
+# 為了完整性，我這裡再貼一次 Tab 1 作為範例
+
 with tab1:
     if selected_code:
         data, ticker_obj = get_stock_data(selected_code, lookback_bars, yf_interval)
@@ -378,11 +396,8 @@ with tab1:
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
             st.subheader(f"{stock_name} ({selected_code}) - {timeframe}技術分析")
             c1, c2, c3, c4 = st.columns(4)
-            # V18.5 修正：確保 Fugle 價格優先
-            if rt_data and rt_data.get('price') is not None:
-                c1.metric("目前股價 (Fugle)", rt_data['price'], rt_data['change'])
-            else:
-                c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
+            if rt_data and rt_data.get('price') is not None: c1.metric("目前股價 (Fugle)", rt_data['price'], rt_data['change'])
+            else: c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
             c2.metric("成交量", f"{int(latest['Volume']/1000)} 張", f"{int((latest['Volume']-df.iloc[-2]['Volume'])/1000)} 張")
             macd_col = df.columns[df.columns.str.startswith('MACDh')][0]
             hist_val = latest[macd_col]
@@ -449,26 +464,37 @@ with tab2:
         stocks_list = list(st.session_state.watchlist.items())
         total = len(stocks_list)
         for i, (code, name) in enumerate(stocks_list):
-            df_scan, _ = get_stock_data(code, 100, interval="1d")
-            if not df_scan.empty:
-                try:
-                    df_scan = calculate_indicators(df_scan)
-                    latest = df_scan.iloc[-1]
-                    prev = df_scan.iloc[-2]
-                    cond_above_ma20 = latest['Close'] > latest['SMA20']
-                    cond_volume = latest['Volume'] > latest['Vol_SMA5']
-                    k_col = df_scan.columns[df_scan.columns.str.startswith('STOCHk')][0]
-                    d_col = df_scan.columns[df_scan.columns.str.startswith('STOCHd')][0]
-                    cond_kd_gold = latest[k_col] > latest[d_col] and prev[k_col] < prev[d_col]
-                    macd_col = df_scan.columns[df_scan.columns.str.startswith('MACDh')][0]
-                    cond_macd = latest[macd_col] > 0
-                    cond_align = latest['SMA5'] > latest['SMA20'] > latest['SMA60']
-                    scan_results.append({"代號": code, "名稱": name, "收盤價": latest['Close'], "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, "站上月線": "✅" if cond_above_ma20 else "❌", "量能爆發": "🔥" if cond_volume else "➖", "KD金叉": "✅" if cond_kd_gold else "➖", "MACD多頭": "✅" if cond_macd else "➖", "均線排列": "🌟" if cond_align else "➖"})
-                except: pass
+            time.sleep(0.5)
+            try:
+                df_scan, _ = get_stock_data(code, 100, interval="1d")
+                if not df_scan.empty:
+                    try:
+                        df_scan = calculate_indicators(df_scan)
+                        latest = df_scan.iloc[-1]
+                        prev = df_scan.iloc[-2]
+                        cond_above_ma20 = latest['Close'] > latest['SMA20']
+                        cond_volume = latest['Volume'] > latest['Vol_SMA5']
+                        k_col = df_scan.columns[df_scan.columns.str.startswith('STOCHk')][0]
+                        d_col = df_scan.columns[df_scan.columns.str.startswith('STOCHd')][0]
+                        cond_kd_gold = latest[k_col] > latest[d_col] and prev[k_col] < prev[d_col]
+                        macd_col = df_scan.columns[df_scan.columns.str.startswith('MACDh')][0]
+                        cond_macd = latest[macd_col] > 0
+                        cond_align = latest['SMA5'] > latest['SMA20'] > latest['SMA60']
+                        item = {
+                            "代號": code, "名稱": name, "收盤價": latest['Close'], 
+                            "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, 
+                            "站上月線": "✅" if cond_above_ma20 else "❌", 
+                            "量能爆發": "🔥" if cond_volume else "➖", 
+                            "KD金叉": "✅" if cond_kd_gold else "➖", 
+                            "MACD多頭": "✅" if cond_macd else "➖", 
+                            "均線排列": "🌟" if cond_align else "➖"
+                        }
+                        scan_results.append(item)
+                    except: pass
+            except Exception as e: pass
             progress_bar.progress((i+1)/total)
         progress.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
-
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
@@ -496,26 +522,36 @@ with tab3:
         progress = st.progress(0)
         total_scan = len(scan_list)
         for i, code in enumerate(scan_list):
-            df_s, _ = get_stock_data(code, 120, interval="1d")
-            if not df_s.empty:
-                try:
-                    df_s = calculate_indicators(df_s)
-                    curr = df_s.iloc[-1]; prev = df_s.iloc[-2]
-                    is_above_ma20 = curr['Close'] > curr['SMA20']
-                    k_col = df_s.columns[df_s.columns.str.startswith('STOCHk')][0]
-                    d_col = df_s.columns[df_s.columns.str.startswith('STOCHd')][0]
-                    is_kd_cross = (curr[k_col] > curr[d_col]) and (prev[k_col] < prev[d_col]) and (curr[k_col] < 50)
-                    macd_col = df_s.columns[df_s.columns.str.startswith('MACDh')][0]
-                    is_macd_turning = curr[macd_col] > prev[macd_col]
-                    is_break_ma60 = (curr['Close'] > curr['SMA60']) and (prev['Close'] < prev['SMA60'])
-                    score = 0; reasons = []
-                    if is_kd_cross: score += 1; reasons.append("KD低檔金叉")
-                    if is_break_ma60: score += 1; reasons.append("突破季線")
-                    if is_above_ma20 and is_macd_turning: score += 1; reasons.append("站穩月線+動能")
-                    if score >= 1:
-                        name = st.session_state.watchlist.get(code, STOCK_NAMES.get(code, code))
-                        reversal_stocks.append({"代號": code, "名稱": name, "收盤價": curr['Close'], "訊號強度": "⭐⭐⭐" if score >= 2 else "⭐", "觸發條件": " + ".join(reasons), "KD值": f"{int(curr[k_col])}", "季線乖離": f"{round(((curr['Close'] - curr['SMA60'])/curr['SMA60'])*100, 1)}%"})
-                except: pass
+            time.sleep(0.5)
+            try:
+                df_s, _ = get_stock_data(code, 120, interval="1d")
+                if not df_s.empty:
+                    try:
+                        df_s = calculate_indicators(df_s)
+                        curr = df_s.iloc[-1]; prev = df_s.iloc[-2]
+                        is_above_ma20 = curr['Close'] > curr['SMA20']
+                        k_col = df_s.columns[df_s.columns.str.startswith('STOCHk')][0]
+                        d_col = df_s.columns[df_s.columns.str.startswith('STOCHd')][0]
+                        is_kd_cross = (curr[k_col] > curr[d_col]) and (prev[k_col] < prev[d_col]) and (curr[k_col] < 50)
+                        macd_col = df_s.columns[df_s.columns.str.startswith('MACDh')][0]
+                        is_macd_turning = curr[macd_col] > prev[macd_col]
+                        is_break_ma60 = (curr['Close'] > curr['SMA60']) and (prev['Close'] < prev['SMA60'])
+                        score = 0; reasons = []
+                        if is_kd_cross: score += 1; reasons.append("KD低檔金叉")
+                        if is_break_ma60: score += 1; reasons.append("突破季線")
+                        if is_above_ma20 and is_macd_turning: score += 1; reasons.append("站穩月線+動能")
+                        if score >= 1:
+                            name = st.session_state.watchlist.get(code, STOCK_NAMES.get(code, code))
+                            item = {
+                                "代號": code, "名稱": name, "收盤價": curr['Close'], 
+                                "訊號強度": "⭐⭐⭐" if score >= 2 else "⭐", 
+                                "觸發條件": " + ".join(reasons), 
+                                "KD值": f"{int(curr[k_col])}", 
+                                "季線乖離": f"{round(((curr['Close'] - curr['SMA60'])/curr['SMA60'])*100, 1)}%"
+                            }
+                            reversal_stocks.append(item)
+                    except: pass
+            except: pass
             progress.progress((i+1)/total_scan)
         progress.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
@@ -527,7 +563,6 @@ with tab3:
             msg = f"🔥 【轉折獵人】發現 {len(rev_df)} 檔潛力股\n板塊：{target_sector}\n"
             for index, row in rev_df.iterrows(): msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n   理由：{row['觸發條件']}\n"
             send_line_message(msg)
-
         event = st.dataframe(rev_df, column_config={"收盤價": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True, on_select="rerun", selection_mode="single-row")
         if event.selection.rows:
             selected_index = event.selection.rows[0]
@@ -550,12 +585,17 @@ with tab4:
         total_scan = len(scan_list_f)
         for i, code in enumerate(scan_list_f):
             status.text(f"正在分析財報：{code}...")
+            time.sleep(0.5)
             try:
                 t_obj = yf.Ticker(f"{code}.TW")
                 is_3_up, metrics = check_three_rates(t_obj)
                 if is_3_up:
                     name = st.session_state.watchlist.get(code, STOCK_NAMES.get(code, code))
-                    fund_results.append({"代號": code, "名稱": name, "毛利率": metrics['gm'], "營益率": metrics['om'], "淨利率": metrics['nm']})
+                    item = {
+                        "代號": code, "名稱": name, 
+                        "毛利率": metrics['gm'], "營益率": metrics['om'], "淨利率": metrics['nm']
+                    }
+                    fund_results.append(item)
             except: pass
             progress.progress((i+1)/total_scan)
         progress.empty()
