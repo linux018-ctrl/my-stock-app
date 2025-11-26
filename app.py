@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V18.2", layout="wide")
-st.title("📈 艾倫杭特 V18.2 - 報價除錯版")
+st.set_page_config(page_title="艾倫杭特 V18.3", layout="wide")
+st.title("📈 艾倫杭特 V18.3 - 語法結構修復版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -93,7 +93,7 @@ STOCK_NAMES = {
     "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
 }
 
-# --- 1. 初始化 Session State ---
+# --- State ---
 if 'watchlist' not in st.session_state: st.session_state.watchlist = load_watchlist()
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
@@ -109,10 +109,10 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     if new_code not in st.session_state.watchlist:
         st.session_state.watchlist[new_code] = new_name; save_watchlist(st.session_state.watchlist)
     st.session_state.sb_selected_code = new_code
-    st.toast(f"✅ 已鎖定：{new_name} ({new_code})，請查看儀表板", icon="🎉")
+    st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (略，保持 V16.0 內容) ---
+# --- SECTOR_DICT (保持 V16.0 內容) ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -145,7 +145,8 @@ with st.sidebar.expander("新增/移除個股"):
     def auto_fill_name():
         code = st.session_state.input_code
         if code:
-            if code in STOCK_NAMES: st.session_state.input_name = STOCK_NAMES[code]
+            if code in STOCK_NAMES:
+                st.session_state.input_name = STOCK_NAMES[code]
             else:
                 try:
                     t = yf.Ticker(f"{code}.TW"); name = t.info.get('longName') or t.info.get('shortName')
@@ -176,63 +177,36 @@ lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 
 
 # --- V18.2: 安全數值讀取 helper ---
 def safe_float(val):
-    """嘗試將輸入值轉為 float，失敗回傳 None"""
-    try:
-        return float(val)
-    except:
-        return None
+    try: return float(val)
+    except: return None
 
 def get_realtime_quote_fugle(code):
     if not fugle_client: return None, None
     try:
         stock = fugle_client.stock
         quote = stock.intraday.quote(symbol=code)
-        
-        # Debug: 回傳 raw json 以便除錯
         raw_json = quote
-        
         if quote:
-            # 1. 處理價格 (Last Trade)
             price = safe_float(quote.get('lastTrade', {}).get('price'))
-            if price is None: 
-                # 備用方案：有些資料結構可能在 trade 裡
-                price = safe_float(quote.get('trade', {}).get('price'))
-
-            # 2. 處理變動 (Change)
+            if price is None: price = safe_float(quote.get('trade', {}).get('price'))
             change = safe_float(quote.get('change'))
-            
-            # 3. 計算漲跌幅 (Change Percent)
             pct_change = 0
             if price is not None and change is not None:
                 prev_close = price - change
-                if prev_close > 0:
-                    pct_change = (change / prev_close) * 100
-            
-            # 4. 處理開高低 (OHL) - 巢狀保護
+                if prev_close > 0: pct_change = (change / prev_close) * 100
             open_p = safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open'))
             high_p = safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high'))
             low_p = safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low'))
-            
-            # 5. 時間處理
             time_str = quote.get('lastUpdated')
-            # 嘗試轉為人類可讀時間 (微秒 -> datetime)
             try:
                 dt_object = datetime.fromtimestamp(time_str / 1000000)
                 time_str = dt_object.strftime("%H:%M:%S")
             except: pass
-
             return {
-                "price": price,
-                "change": change,
-                "changePercent": round(pct_change, 2),
-                "open": open_p,
-                "high": high_p,
-                "low": low_p,
-                "time": time_str
+                "price": price, "change": change, "changePercent": round(pct_change, 2),
+                "open": open_p, "high": high_p, "low": low_p, "time": time_str
             }, raw_json
-            
-    except Exception as e:
-        return None, str(e)
+    except Exception as e: return None, str(e)
     return None, None
 
 # --- 核心功能區 ---
@@ -367,31 +341,24 @@ c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
 with c_head2:
     if st.button("🔄 立即更新報價"): st.rerun()
-
-# V18.2: 改用 Fugle 抓取 + Raw Data 檢視
 rt_data, raw_json = get_realtime_quote_fugle(selected_code)
-
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
     price = rt_data.get('price', '—')
     change = rt_data.get('change', '—')
     pct = rt_data.get('changePercent', '—')
     r1.metric("成交價", f"{price}", f"{change} ({pct}%)")
-    r2.metric("開盤", rt_data.get('open', '—'))
-    r3.metric("最高", rt_data.get('high', '—'))
-    r4.metric("最低", rt_data.get('low', '—'))
+    r2.metric("開盤", rt_data.get('open', '—')); r3.metric("最高", rt_data.get('high', '—')); r4.metric("最低", rt_data.get('low', '—'))
     st.caption(f"✅ 資料來源：Fugle 富果 API (更新時間: {rt_data.get('time', 'N/A')})")
 else:
     st.warning("⚠️ 暫時無法取得 Fugle 即時連線，請檢查下方的原始資料或 API Key。")
 
-# V18.2 新增：除錯用展開區
 with st.expander("🔍 [開發者模式] 查看 API 原始回傳資料 (Raw JSON)"):
     st.json(raw_json if raw_json else {"status": "No Data", "key_configured": bool(FUGLE_API_KEY)})
 
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
 
-# 分頁 1: 個股詳細分析
 with tab1:
     if selected_code:
         data, ticker_obj = get_stock_data(selected_code, lookback_bars, yf_interval)
@@ -405,7 +372,8 @@ with tab1:
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
             st.subheader(f"{stock_name} ({selected_code}) - {timeframe}技術分析")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
+            if rt_data: c1.metric("目前股價 (Fugle)", rt_data['price'], rt_data['change'])
+            else: c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
             c2.metric("成交量", f"{int(latest['Volume']/1000)} 張", f"{int((latest['Volume']-df.iloc[-2]['Volume'])/1000)} 張")
             macd_col = df.columns[df.columns.str.startswith('MACDh')][0]
             hist_val = latest[macd_col]
@@ -488,13 +456,24 @@ with tab2:
                         macd_col = df_scan.columns[df_scan.columns.str.startswith('MACDh')][0]
                         cond_macd = latest[macd_col] > 0
                         cond_align = latest['SMA5'] > latest['SMA20'] > latest['SMA60']
-                        scan_results.append({"代號": code, "名稱": name, "收盤價": latest['Close'], "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, "站上月線": "✅" if cond_above_ma20 else "❌", "量能爆發": "🔥" if cond_volume else "➖", "KD金叉": "✅" if cond_kd_gold else "➖", "MACD多頭": "✅" if cond_macd else "➖", "均線排列": "🌟" if cond_align else "➖"})
+                        # V18.3: 拆解長代碼以避免語法錯誤
+                        result_item = {
+                            "代號": code, 
+                            "名稱": name, 
+                            "收盤價": latest['Close'], 
+                            "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, 
+                            "站上月線": "✅" if cond_above_ma20 else "❌", 
+                            "量能爆發": "🔥" if cond_volume else "➖", 
+                            "KD金叉": "✅" if cond_kd_gold else "➖", 
+                            "MACD多頭": "✅" if cond_macd else "➖", 
+                            "均線排列": "🌟" if cond_align else "➖"
+                        }
+                        scan_results.append(result_item)
                     except: pass
             except Exception as e: pass
             progress_bar.progress((i+1)/total)
         progress.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
-
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
