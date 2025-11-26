@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V18.3", layout="wide")
-st.title("📈 艾倫杭特 V18.3 - 語法結構修復版")
+st.set_page_config(page_title="艾倫杭特 V18.4", layout="wide")
+st.title("📈 艾倫杭特 V18.4 - 結構強化穩定版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -112,7 +112,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (保持 V16.0 內容) ---
+# --- SECTOR_DICT ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -359,6 +359,7 @@ with st.expander("🔍 [開發者模式] 查看 API 原始回傳資料 (Raw JSON
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
 
+# 分頁 1: 個股詳細分析
 with tab1:
     if selected_code:
         data, ticker_obj = get_stock_data(selected_code, lookback_bars, yf_interval)
@@ -372,8 +373,7 @@ with tab1:
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
             st.subheader(f"{stock_name} ({selected_code}) - {timeframe}技術分析")
             c1, c2, c3, c4 = st.columns(4)
-            if rt_data: c1.metric("目前股價 (Fugle)", rt_data['price'], rt_data['change'])
-            else: c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
+            c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
             c2.metric("成交量", f"{int(latest['Volume']/1000)} 張", f"{int((latest['Volume']-df.iloc[-2]['Volume'])/1000)} 張")
             macd_col = df.columns[df.columns.str.startswith('MACDh')][0]
             hist_val = latest[macd_col]
@@ -431,6 +431,7 @@ with tab1:
                 else: st.info("暫無相關新聞")
             except: st.warning("新聞載入失敗。")
 
+# 分頁 2: 觀察名單掃描器
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
     st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
@@ -456,11 +457,9 @@ with tab2:
                         macd_col = df_scan.columns[df_scan.columns.str.startswith('MACDh')][0]
                         cond_macd = latest[macd_col] > 0
                         cond_align = latest['SMA5'] > latest['SMA20'] > latest['SMA60']
-                        # V18.3: 拆解長代碼以避免語法錯誤
-                        result_item = {
-                            "代號": code, 
-                            "名稱": name, 
-                            "收盤價": latest['Close'], 
+                        # V18.4: 拆解長代碼
+                        item = {
+                            "代號": code, "名稱": name, "收盤價": latest['Close'], 
                             "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, 
                             "站上月線": "✅" if cond_above_ma20 else "❌", 
                             "量能爆發": "🔥" if cond_volume else "➖", 
@@ -468,12 +467,13 @@ with tab2:
                             "MACD多頭": "✅" if cond_macd else "➖", 
                             "均線排列": "🌟" if cond_align else "➖"
                         }
-                        scan_results.append(result_item)
+                        scan_results.append(item)
                     except: pass
             except Exception as e: pass
             progress_bar.progress((i+1)/total)
         progress.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
+
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
@@ -491,6 +491,7 @@ with tab2:
                 st.rerun()
     elif st.session_state.scan_result_tab2 is not None: st.info("無資料")
 
+# 分頁 3: 轉折獵人
 with tab3:
     st.subheader("🔥 Goodinfo 風格 - 轉折獵人")
     target_sector = st.selectbox("請選擇掃描分類", options=list(SECTOR_DICT.keys()))
@@ -505,26 +506,39 @@ with tab3:
             try:
                 df_s, _ = get_stock_data(code, 120, interval="1d")
                 if not df_s.empty:
-                    df_s = calculate_indicators(df_s)
-                    curr = df_s.iloc[-1]; prev = df_s.iloc[-2]
-                    is_above_ma20 = curr['Close'] > curr['SMA20']
-                    k_col = df_s.columns[df_s.columns.str.startswith('STOCHk')][0]
-                    d_col = df_s.columns[df_s.columns.str.startswith('STOCHd')][0]
-                    is_kd_cross = (curr[k_col] > curr[d_col]) and (prev[k_col] < prev[d_col]) and (curr[k_col] < 50)
-                    macd_col = df_s.columns[df_s.columns.str.startswith('MACDh')][0]
-                    is_macd_turning = curr[macd_col] > prev[macd_col]
-                    is_break_ma60 = (curr['Close'] > curr['SMA60']) and (prev['Close'] < prev['SMA60'])
-                    score = 0; reasons = []
-                    if is_kd_cross: score += 1; reasons.append("KD低檔金叉")
-                    if is_break_ma60: score += 1; reasons.append("突破季線")
-                    if is_above_ma20 and is_macd_turning: score += 1; reasons.append("站穩月線+動能")
-                    if score >= 1:
-                        name = st.session_state.watchlist.get(code, STOCK_NAMES.get(code, code))
-                        reversal_stocks.append({"代號": code, "名稱": name, "收盤價": curr['Close'], "訊號強度": "⭐⭐⭐" if score >= 2 else "⭐", "觸發條件": " + ".join(reasons), "KD值": f"{int(curr[k_col])}", "季線乖離": f"{round(((curr['Close'] - curr['SMA60'])/curr['SMA60'])*100, 1)}%"})
-                except: pass
+                    try:
+                        df_s = calculate_indicators(df_s)
+                        curr = df_s.iloc[-1]; prev = df_s.iloc[-2]
+                        is_above_ma20 = curr['Close'] > curr['SMA20']
+                        k_col = df_s.columns[df_s.columns.str.startswith('STOCHk')][0]
+                        d_col = df_s.columns[df_s.columns.str.startswith('STOCHd')][0]
+                        is_kd_cross = (curr[k_col] > curr[d_col]) and (prev[k_col] < prev[d_col]) and (curr[k_col] < 50)
+                        macd_col = df_s.columns[df_s.columns.str.startswith('MACDh')][0]
+                        is_macd_turning = curr[macd_col] > prev[macd_col]
+                        is_break_ma60 = (curr['Close'] > curr['SMA60']) and (prev['Close'] < prev['SMA60'])
+                        score = 0; reasons = []
+                        if is_kd_cross: score += 1; reasons.append("KD低檔金叉")
+                        if is_break_ma60: score += 1; reasons.append("突破季線")
+                        if is_above_ma20 and is_macd_turning: score += 1; reasons.append("站穩月線+動能")
+                        if score >= 1:
+                            name = st.session_state.watchlist.get(code, STOCK_NAMES.get(code, code))
+                            # V18.4: 拆解長代碼
+                            item = {
+                                "代號": code, 
+                                "名稱": name, 
+                                "收盤價": curr['Close'], 
+                                "訊號強度": "⭐⭐⭐" if score >= 2 else "⭐", 
+                                "觸發條件": " + ".join(reasons), 
+                                "KD值": f"{int(curr[k_col])}", 
+                                "季線乖離": f"{round(((curr['Close'] - curr['SMA60'])/curr['SMA60'])*100, 1)}%"
+                            }
+                            reversal_stocks.append(item)
+                    except: pass
+            except: pass
             progress.progress((i+1)/total_scan)
         progress.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
+
     if st.session_state.scan_result_tab3 is not None and not st.session_state.scan_result_tab3.empty:
         rev_df = st.session_state.scan_result_tab3
         st.success(f"發現 {len(rev_df)} 檔潛在轉折股！")
@@ -560,7 +574,12 @@ with tab4:
                 is_3_up, metrics = check_three_rates(t_obj)
                 if is_3_up:
                     name = st.session_state.watchlist.get(code, STOCK_NAMES.get(code, code))
-                    fund_results.append({"代號": code, "名稱": name, "毛利率": metrics['gm'], "營益率": metrics['om'], "淨利率": metrics['nm']})
+                    # V18.4: 拆解長代碼
+                    item = {
+                        "代號": code, "名稱": name, 
+                        "毛利率": metrics['gm'], "營益率": metrics['om'], "淨利率": metrics['nm']
+                    }
+                    fund_results.append(item)
             except: pass
             progress.progress((i+1)/total_scan)
         progress.empty()
@@ -579,6 +598,9 @@ with tab4:
                 st.rerun()
     elif st.session_state.scan_result_tab4 is not None: st.info("可惜，沒有發現三率三升的股票。")
 
+# Tab 5, 6, 7 (保持 V16.4 內容，無需更動，請直接複製貼上)
+# ... (以下請貼上 V16.4 / V17.3 的 Tab 5, 6, 7 程式碼) ...
+
 with tab5:
     st.subheader("🧪 策略回測實驗室 - 驗證你的交易策略")
     STRATEGY_DESC = {
@@ -593,7 +615,9 @@ with tab5:
     period_map = {"1年 (短線)": "1y", "3年 (中線)": "3y", "5年 (長線)": "5y"}
     bb_thresh = 0.05
     if "布林" in bt_strategy or "狙擊" in bt_strategy: bb_thresh = col3.slider("布林乖離門檻", 0.01, 0.10, 0.05, 0.01, format="%.2f")
+    
     c_act1, c_act2 = st.columns([1, 2])
+    
     if c_act1.button("▶️ 開始回測 (單一策略)"):
         target_name = st.session_state.watchlist.get(selected_code, selected_code)
         st.write(f"正在回測：**{target_name} ({selected_code})** | 策略：{bt_strategy}...")
@@ -669,6 +693,7 @@ with tab6:
                 acc, pred, prob, importances, feature_names = train_and_predict_ai(df_ai)
             st.session_state.ai_data = {"target_name": target_name, "code": selected_code, "acc": acc, "pred": pred, "prob": prob, "importances": importances, "feature_names": feature_names}
         else: st.error("歷史資料不足，無法進行 AI 訓練。")
+
     if st.session_state.ai_data:
         ai = st.session_state.ai_data
         col1, col2 = st.columns(2)
@@ -704,7 +729,6 @@ with tab7:
         df_view = data_chip.tail(c_view)
         if c_interval == "1d": df_view.index = df_view.index.strftime('%Y-%m-%d')
         else: df_view.index = df_view.index.strftime('%m-%d %H:%M')
-        
         if "波段" in chip_mode:
             st.markdown("### 🤖 艾倫杭特・籌碼AI診斷")
             price_trend = df_view.iloc[-1]['Close'] - df_view.iloc[0]['Close']
