@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V19.0", layout="wide")
-st.title("📈 艾倫杭特 V19.0 - 匯率連動戰情版")
+st.set_page_config(page_title="艾倫杭特 V19.1", layout="wide")
+st.title("📈 艾倫杭特 V19.1 - 匯率連動戰情版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -112,7 +112,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (略，保持 V16.0 內容) ---
+# --- SECTOR_DICT ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -139,7 +139,7 @@ SECTOR_DICT = {
     "你的觀察名單": [] 
 }
 
-# --- 側邊欄：名單管理 ---
+# --- 側邊欄 ---
 st.sidebar.header("📝 觀察名單管理")
 with st.sidebar.expander("新增/移除個股"):
     def auto_fill_name():
@@ -209,14 +209,15 @@ def get_realtime_quote_fugle(code):
     except Exception as e: return None, str(e)
     return None, None
 
-# --- V19.0: 取得匯率 (USD/TWD) ---
+# --- V19.1: 取得匯率 (USD/TWD) ---
 def get_usdtwd_rate():
     try:
-        ticker = yf.Ticker("TWD=X") # Yahoo Finance 匯率代碼
-        data = ticker.history(period="2d") # 抓兩天以計算漲跌
+        ticker = yf.Ticker("TWD=X") 
+        data = ticker.history(period="2d")
         if not data.empty:
             rate = data['Close'].iloc[-1]
-            prev = data['Close'].iloc[-2]
+            # 若只有一筆資料(剛開盤)，改用 Open
+            prev = data['Close'].iloc[-2] if len(data) > 1 else data['Open'].iloc[-1]
             change = rate - prev
             return round(rate, 3), round(change, 3)
     except: pass
@@ -348,18 +349,12 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
-# --- Header: 即時報價 + V19.0 匯率 ---
+# --- Header: 即時報價 + V19.1 匯率戰情 ---
 stock_name = st.session_state.watchlist.get(selected_code, selected_code)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
 with c_head2:
-    if st.button("🔄 立即更新報價"): st.rerun()
-
-# 顯示匯率 (V19.0)
-fx_rate, fx_change = get_usdtwd_rate()
-if fx_rate:
-    fx_color = "inverse" if fx_change > 0 else "normal" # 漲=紅=inverse(st.metric預設)
-    st.metric("🇺🇸 美元兌台幣 (USD/TWD)", f"{fx_rate}", f"{fx_change}", delta_color=fx_color)
+    if st.button("🔄 更新股價"): st.rerun()
 
 rt_data, raw_json = get_realtime_quote_fugle(selected_code)
 if rt_data:
@@ -376,12 +371,25 @@ else:
 with st.expander("🔍 [開發者模式] 查看 API 原始回傳資料 (Raw JSON)"):
     st.json(raw_json if raw_json else {"status": "No Data", "key_configured": bool(FUGLE_API_KEY)})
 
+st.markdown("---")
+
+# V19.1: 匯率戰情區 (含手動更新按鈕)
+st.markdown("### 💱 國際匯率戰情 (Yahoo Finance)")
+fx_c1, fx_c2 = st.columns([3, 1])
+with fx_c1:
+    fx_rate, fx_change = get_usdtwd_rate()
+    if fx_rate:
+        fx_color = "inverse" if fx_change > 0 else "normal"
+        st.metric("🇺🇸 美元兌台幣 (USD/TWD)", f"{fx_rate}", f"{fx_change}", delta_color=fx_color)
+    else:
+        st.warning("無法取得匯率數據")
+with fx_c2:
+    st.write("") # Spacer
+    st.write("") # Spacer
+    if st.button("🔄 更新匯率"): st.rerun()
+
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
-
-# (以下 Tab 1~7 程式碼保持不變，為節省篇幅請參照 V18.4)
-# 請務必將 V18.4 的 Tabs 程式碼貼在這裡！
-# 為了完整性，我這裡再貼一次 Tab 1 作為範例
 
 with tab1:
     if selected_code:
@@ -480,21 +488,13 @@ with tab2:
                         macd_col = df_scan.columns[df_scan.columns.str.startswith('MACDh')][0]
                         cond_macd = latest[macd_col] > 0
                         cond_align = latest['SMA5'] > latest['SMA20'] > latest['SMA60']
-                        item = {
-                            "代號": code, "名稱": name, "收盤價": latest['Close'], 
-                            "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, 
-                            "站上月線": "✅" if cond_above_ma20 else "❌", 
-                            "量能爆發": "🔥" if cond_volume else "➖", 
-                            "KD金叉": "✅" if cond_kd_gold else "➖", 
-                            "MACD多頭": "✅" if cond_macd else "➖", 
-                            "均線排列": "🌟" if cond_align else "➖"
-                        }
-                        scan_results.append(item)
+                        scan_results.append({"代號": code, "名稱": name, "收盤價": latest['Close'], "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, "站上月線": "✅" if cond_above_ma20 else "❌", "量能爆發": "🔥" if cond_volume else "➖", "KD金叉": "✅" if cond_kd_gold else "➖", "MACD多頭": "✅" if cond_macd else "➖", "均線排列": "🌟" if cond_align else "➖"})
                     except: pass
             except Exception as e: pass
             progress_bar.progress((i+1)/total)
         progress.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
+
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
