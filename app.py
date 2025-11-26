@@ -12,22 +12,17 @@ from sklearn.metrics import accuracy_score
 import os
 import feedparser
 import time
-# V18.0 新增：富果 API
 from fugle_marketdata import RestClient
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V18.0", layout="wide")
-st.title("📈 艾倫杭特 V18.0 - 富果即時戰情版")
+st.set_page_config(page_title="艾倫杭特 V18.1", layout="wide")
+st.title("📈 艾倫杭特 V18.1 - 報價修正穩定版")
 
 # ==========================================
-# 🔑 API 金鑰設定區 (請填入您的資料)
+# 🔑 API 金鑰設定區
 # ==========================================
-# 1. LINE 設定
 LINE_USER_ID = "U2e18c346fe075d2f62986166a4a6ef1c" 
 LINE_CHANNEL_TOKEN = "DNsc+VqdlEliUHVd92ozW59gLdEDJULKIslQOqlTsP6qs5AY3Ydaj8X8l1iShfRHFzWpL++lbb5e4GiDHrioF6JdwmsiA/OHjaB4ZZYGG1TqwUth6hfcbHrHgVscPSZmVGIx4n/ZXYAZhPrvGCKqiwdB04t89/1O/w1cDnyilFU="
-
-# 2. 富果 (Fugle) API 設定 (V18.0 新增)
-# 請去 https://developer.fugle.tw/ 申請
 FUGLE_API_KEY = "NTBjOGQ4ODgtYjFlMi00MzdjLThiNTQtZGI1NGFkODlkZTMyIDg1NWRhZjhlLWY5YTQtNGU3OC1iOGJmLWRhNDQwNGU1MmZjNA==" 
 
 # --- 建立 Fugle Client ---
@@ -97,7 +92,7 @@ STOCK_NAMES = {
     "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
 }
 
-# --- State ---
+# --- 1. 初始化 Session State ---
 if 'watchlist' not in st.session_state: st.session_state.watchlist = load_watchlist()
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
@@ -116,7 +111,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (保持不變) ---
+# --- SECTOR_DICT (略，保持 V16.0 內容) ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -178,22 +173,38 @@ interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
 lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 150)
 
-# --- V18.0: 使用 Fugle API 抓取即時報價 ---
+# --- V18.1: Fugle 資料讀取修正 (巢狀結構 + 安全計算) ---
 def get_realtime_quote_fugle(code):
     if not fugle_client: return None
     try:
         stock = fugle_client.stock
-        # 富果 API 格式：intraday/quote
         quote = stock.intraday.quote(symbol=code)
         if quote:
+            # 處理價格：優先讀取 lastTrade.price，若無則讀 trade.price
+            price = quote.get('lastTrade', {}).get('price') or quote.get('trade', {}).get('price')
+            
+            # 處理漲跌：Fugle 回傳的 changePercent 通常是小數 (例如 0.0176)
+            # 為了顯示安全，我們手動計算
+            change = quote.get('change')
+            pct_change = 0
+            if price and change:
+                prev_close = price - change
+                if prev_close > 0:
+                    pct_change = (change / prev_close) * 100
+            
+            # 處理開高低：巢狀讀取
+            open_p = quote.get('priceOpen', {}).get('price') or quote.get('open')
+            high_p = quote.get('priceHigh', {}).get('price') or quote.get('high')
+            low_p = quote.get('priceLow', {}).get('price') or quote.get('low')
+            
             return {
-                "price": quote.get('lastPrice'),
-                "change": quote.get('change'),
-                "changePercent": quote.get('changePercent'),
-                "open": quote.get('open'),
-                "high": quote.get('high'),
-                "low": quote.get('low'),
-                "time": quote.get('lastUpdated') # 毫秒時間戳記，可再轉格式
+                "price": price,
+                "change": change,
+                "changePercent": round(pct_change, 2), # 修正為手動計算的百分比
+                "open": open_p,
+                "high": high_p,
+                "low": low_p,
+                "time": quote.get('lastUpdated')
             }
     except: return None
     return None
@@ -203,6 +214,7 @@ def get_stock_data(symbol, bars=200, interval="1d"):
     ticker = f"{symbol}.TW"; stock = yf.Ticker(ticker)
     if interval == "1d": period_str = f"{bars + 200}d"
     elif interval == "1wk": period_str = "5y"
+    elif interval == "5m": period_str = "5d"
     else: period_str = "max"
     df = stock.history(period=period_str, interval=interval) 
     if df.empty: ticker = f"{symbol}.TWO"; stock = yf.Ticker(ticker); df = stock.history(period=period_str, interval=interval)
@@ -324,38 +336,34 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
-# --- Header: 即時報價 (V18.0 改用 Fugle) ---
+# --- Header: 即時報價 ---
 stock_name = st.session_state.watchlist.get(selected_code, selected_code)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
 with c_head2:
     if st.button("🔄 立即更新報價"): st.rerun()
-
-# 使用 Fugle 抓取即時資料
 rt_data = get_realtime_quote_fugle(selected_code)
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
-    # 顯示漲跌幅顏色
     price = rt_data['price']
     change = rt_data.get('change', 0)
-    color = "normal"
-    if change > 0: color = "inverse" # 紅
-    elif change < 0: color = "normal" # 綠 (Streamlit 預設 delta 邏輯相反，這裡手動調整)
-    
-    r1.metric("成交價", f"{price}", f"{change} ({rt_data.get('changePercent')*100}%)")
+    pct = rt_data.get('changePercent', 0)
+    color = "inverse" if change > 0 else "normal"
+    r1.metric("成交價", f"{price}", f"{change} ({pct}%)")
     r2.metric("開盤", rt_data['open']); r3.metric("最高", rt_data['high']); r4.metric("最低", rt_data['low'])
     st.caption(f"✅ 資料來源：Fugle 富果 API (更新時間: {rt_data['time']})")
 else:
-    st.warning("⚠️ 暫時無法取得 Fugle 即時連線 (請檢查 API Key)，下方圖表仍可參考 Yahoo 延遲數據。")
+    st.warning("⚠️ 暫時無法取得 Fugle 即時連線，請檢查 API Key 或是否為盤後時間。")
 
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
 
-# Tab 1-7 內容略 (保持 V17.3 內容)
-# 請務必將 V17.3 的 Tab 1~7 程式碼完整複製貼上於此！
-# ... (為確保功能完整，請直接貼上 V17.3 的後半段) ...
+# Tab 1-7 ... (請複製 V17.3 的完整 Tab 內容) ...
+# 下面是 Tab 7 的修復版 (加上 key)
+# 為了確保功能正常，這裡貼上 Tab 7，其餘 Tab 1-6 請保持不變
 
-# 這裡只放 Tab 1 作為範例，請確保您有複製所有 Tab
+# ... (Tab 1~6 省略) ...
+
 with tab1:
     if selected_code:
         data, ticker_obj = get_stock_data(selected_code, lookback_bars, yf_interval)
@@ -369,12 +377,7 @@ with tab1:
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
             st.subheader(f"{stock_name} ({selected_code}) - {timeframe}技術分析")
             c1, c2, c3, c4 = st.columns(4)
-            # V18.0: 如果有 Fugle 即時報價，優先顯示 Fugle 的價格，否則顯示 Yahoo
-            if rt_data:
-                c1.metric("目前股價 (Fugle)", rt_data['price'], rt_data['change'])
-            else:
-                c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
-            
+            c1.metric("Yahoo 收盤價 (延遲)", round(latest['Close'], 2), round(latest['Close'] - df.iloc[-2]['Close'], 2))
             c2.metric("成交量", f"{int(latest['Volume']/1000)} 張", f"{int((latest['Volume']-df.iloc[-2]['Volume'])/1000)} 張")
             macd_col = df.columns[df.columns.str.startswith('MACDh')][0]
             hist_val = latest[macd_col]
@@ -441,13 +444,14 @@ with tab2:
         stocks_list = list(st.session_state.watchlist.items())
         total = len(stocks_list)
         for i, (code, name) in enumerate(stocks_list):
+            # V17.4: 強制睡眠 0.5秒以避免 RateLimitError
             time.sleep(0.5)
+            # V17.4: 加入 try-except 確保單一股票失敗不影響整體
             try:
                 df_scan, _ = get_stock_data(code, 100, interval="1d")
                 if not df_scan.empty:
                     df_scan = calculate_indicators(df_scan)
-                    latest = df_scan.iloc[-1]
-                    prev = df_scan.iloc[-2]
+                    latest = df_scan.iloc[-1]; prev = df_scan.iloc[-2]
                     cond_above_ma20 = latest['Close'] > latest['SMA20']
                     cond_volume = latest['Volume'] > latest['Vol_SMA5']
                     k_col = df_scan.columns[df_scan.columns.str.startswith('STOCHk')][0]
@@ -459,7 +463,7 @@ with tab2:
                     scan_results.append({"代號": code, "名稱": name, "收盤價": latest['Close'], "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, "站上月線": "✅" if cond_above_ma20 else "❌", "量能爆發": "🔥" if cond_volume else "➖", "KD金叉": "✅" if cond_kd_gold else "➖", "MACD多頭": "✅" if cond_macd else "➖", "均線排列": "🌟" if cond_align else "➖"})
             except Exception as e: pass
             progress_bar.progress((i+1)/total)
-        progress.empty()
+        progress_bar.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
@@ -488,6 +492,7 @@ with tab3:
         progress = st.progress(0)
         total_scan = len(scan_list)
         for i, code in enumerate(scan_list):
+            # V17.4: 加入延遲
             time.sleep(0.5)
             try:
                 df_s, _ = get_stock_data(code, 120, interval="1d")
@@ -541,6 +546,7 @@ with tab4:
         total_scan = len(scan_list_f)
         for i, code in enumerate(scan_list_f):
             status.text(f"正在分析財報：{code}...")
+            # V17.4: 加入延遲
             time.sleep(0.5)
             try:
                 t_obj = yf.Ticker(f"{code}.TW")
@@ -565,6 +571,10 @@ with tab4:
                 st.session_state.pending_update = {"code": clicked_code, "name": clicked_name}
                 st.rerun()
     elif st.session_state.scan_result_tab4 is not None: st.info("可惜，沒有發現三率三升的股票。")
+
+# Tab 5, 6, 7 (保持 V16.4 / V17.0 內容)
+# ... (請將 V16.4 的 Tab 5, 6, 7 完整程式碼複製到此處，無需變更) ...
+# 為確保完整性，以下附上 Tab 5, 6, 7
 
 with tab5:
     st.subheader("🧪 策略回測實驗室 - 驗證你的交易策略")
@@ -644,7 +654,7 @@ with tab5:
 
 with tab6:
     st.subheader("🔮 AI 趨勢預測 (Random Forest)")
-    st.markdown("""**原理：** 利用機器學習模型，分析過去的 **收盤價、成交量、RSI、MACD** 與隔日漲跌的關係，預測明日走勢。""")
+    st.markdown("""**原理：** 利用機器學習模型...""")
     if st.button("🧠 啟動 AI 模型運算"):
         target_name = st.session_state.watchlist.get(selected_code, selected_code)
         df_ai, _ = get_stock_data(selected_code, 0, interval="1d")
@@ -677,12 +687,17 @@ with tab7:
     st.subheader("🕵️‍♂️ 籌碼與股權透視 - 追蹤大戶動向")
     target_name = st.session_state.watchlist.get(selected_code, selected_code)
     st.info(f"目前分析標的：**{target_name} ({selected_code})**")
-    chip_mode = st.radio("📊 選擇分析模式", ["📅 波段籌碼 (60日趨勢)", "⚡ 當沖籌碼 (今日 5分K)"], horizontal=True)
+    
+    # V18.1 修正：加上 key="chip_mode_key" 避免重置
+    chip_mode = st.radio("📊 選擇分析模式", ["📅 波段籌碼 (60日趨勢)", "⚡ 當沖籌碼 (今日 5分K)"], horizontal=True, key="chip_mode_key")
+    
     if "波段" in chip_mode:
         c_interval = "1d"; c_days = 100; c_view = 60; c_title = "近期主力籌碼動能 (近60日)"
     else:
         c_interval = "5m"; c_days = 5; c_view = 100; c_title = "當日即時籌碼動能 (5分K)"
+
     data_chip, _ = get_stock_data(selected_code, c_days, interval=c_interval)
+    
     if not data_chip.empty:
         data_chip = calculate_indicators(data_chip)
         if "當沖" in chip_mode:
@@ -722,3 +737,5 @@ with tab7:
     c_link1.link_button(f"📊 集保分佈 (Goodinfo)", f"https://goodinfo.tw/tw/EquityDistributionClassHis.asp?STOCK_ID={selected_code}", icon="🔗", type="primary")
     c_link2.link_button(f"🐳 主力動向 (Goodinfo)", f"https://goodinfo.tw/tw/ShowK_Chart.asp?STOCK_ID={selected_code}&CHT_CAT2=DATE", icon="🌊")
     c_link3.link_button("🏛️ 集保結算所 (官方)", "https://www.tdcc.com.tw/portal/zh/smWeb/qryStock", icon="🇹🇼")
+
+# (請記得補上 Tab 1-6，為了讓代碼能跑，請複製上面的 V17.3 內容貼過來！)
