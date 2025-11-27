@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V19.4", layout="wide")
-st.title("📈 艾倫杭特 V19.4 - 總經數據強力修復版")
+st.set_page_config(page_title="艾倫杭特 V19.5", layout="wide")
+st.title("📈 艾倫杭特 V19.5 - 債券數據補完版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -112,7 +112,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT ---
+# --- SECTOR_DICT (略，保持 V16.0 內容) ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -209,25 +209,48 @@ def get_realtime_quote_fugle(code):
     except Exception as e: return None, str(e)
     return None, None
 
-# --- V19.4: 取得總經數據 (強力修復版) ---
+# --- V19.5: 取得總經數據 (補完版) ---
 def get_macro_data():
     data = {}
-    tickers = {
-        "USD/TWD": "TWD=X",
-        "10Y Yield": "^TNX", 
-        "20Y Price (TLT)": "TLT"
-    }
-    for name, symbol in tickers.items():
-        try:
-            t = yf.Ticker(symbol)
-            # 改抓 5 天，避免週末/假日抓不到資料
-            hist = t.history(period="5d") 
-            if len(hist) >= 2:
-                now = hist['Close'].iloc[-1]
-                prev = hist['Close'].iloc[-2]
-                change = now - prev
-                data[name] = (now, change)
-        except: pass
+    # 1. USD/TWD (匯率)
+    try:
+        t = yf.Ticker("TWD=X"); hist = t.history(period="5d") # 改抓5天
+        if not hist.empty:
+            now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]
+            data['USD/TWD'] = (now, now - prev)
+    except: pass
+
+    # 2. 10Y Yield (^TNX) - 這是殖利率
+    try:
+        t = yf.Ticker("^TNX"); hist = t.history(period="5d")
+        if not hist.empty:
+            now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]
+            data['10Y Yield'] = (now, now - prev)
+    except: pass
+    
+    # 3. 10Y Price (IEF) - 新增：用 ETF 當價格
+    try:
+        t = yf.Ticker("IEF"); hist = t.history(period="5d")
+        if not hist.empty:
+            now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]
+            data['10Y Price (IEF)'] = (now, now - prev)
+    except: pass
+
+    # 4. 20Y Price (TLT) - 這是價格
+    try:
+        t = yf.Ticker("TLT"); hist = t.history(period="5d")
+        if not hist.empty:
+            now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]
+            data['20Y Price (TLT)'] = (now, now - prev)
+            
+            # 4.1 嘗試抓 TLT 的殖利率 (Yield)
+            try: 
+                yield_val = t.info.get('yield', 0)
+                if not yield_val: yield_val = t.info.get('trailingAnnualDividendYield', 0)
+                data['20Y Yield'] = yield_val * 100 # 轉成百分比
+            except: pass
+    except: pass
+
     return data
 
 # --- 核心功能區 ---
@@ -356,7 +379,7 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
-# --- Header: 即時報價 + V19.3 總經戰情 ---
+# --- Header: 即時報價 ---
 stock_name = st.session_state.watchlist.get(selected_code, selected_code)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
@@ -366,9 +389,7 @@ with c_head2:
 rt_data, raw_json = get_realtime_quote_fugle(selected_code)
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
-    price = rt_data.get('price', '—')
-    change = rt_data.get('change', '—')
-    pct = rt_data.get('changePercent', '—')
+    price = rt_data.get('price', '—'); change = rt_data.get('change', '—'); pct = rt_data.get('changePercent', '—')
     r1.metric("成交價", f"{price}", f"{change} ({pct}%)")
     r2.metric("開盤", rt_data.get('open', '—')); r3.metric("最高", rt_data.get('high', '—')); r4.metric("最低", rt_data.get('low', '—'))
     st.caption(f"✅ 資料來源：Fugle 富果 API (更新時間: {rt_data.get('time', 'N/A')})")
@@ -380,39 +401,56 @@ with st.expander("🔍 [開發者模式] 查看 API 原始回傳資料 (Raw JSON
 
 st.markdown("---")
 
-# V19.3: 總經戰情區 (獨立抓取+強制格式化)
+# V19.5: 總經戰情區 (5大指標：匯率 + 10Y價/息 + 20Y價/息)
 st.markdown("### 🌎 國際總經戰情室 (更新按鈕在右側)")
 macro_data = get_macro_data()
 
-m1, m2, m3, m4 = st.columns([1, 1, 1, 0.5]) 
+# 改為 5 欄設計 + 1 刷新鈕
+m1, m2, m3, m4, m5, m6 = st.columns([1, 1, 1, 1, 1, 0.5]) 
 
-with m1:
+with m1: # 匯率
     if "USD/TWD" in macro_data:
         rate, change = macro_data["USD/TWD"]
         color = "inverse" if change > 0 else "normal"
         st.metric("🇺🇸 美元兌台幣", f"{rate:.2f}", f"{change:.2f}", delta_color=color)
     else: st.metric("🇺🇸 美元兌台幣", "N/A", "N/A")
 
-with m2:
+with m2: # 10Y 殖利率
     if "10Y Yield" in macro_data:
         rate, change = macro_data["10Y Yield"]
         color = "inverse" if change > 0 else "normal"
         st.metric("🏦 美債10年殖利率", f"{rate:.2f}%", f"{change:.2f}", delta_color=color)
     else: st.metric("🏦 美債10年殖利率", "N/A", "N/A")
 
-with m3:
+with m3: # 10Y 價格 (IEF)
+    if "10Y Price (IEF)" in macro_data:
+        price, change = macro_data["10Y Price (IEF)"]
+        color = "normal" if change > 0 else "inverse"
+        st.metric("📉 美債10年價格(IEF)", f"{price:.2f}", f"{change:.2f}", delta_color=color)
+    else: st.metric("📉 美債10年價格(IEF)", "N/A", "N/A")
+
+with m4: # 20Y 價格 (TLT)
     if "20Y Price (TLT)" in macro_data:
         price, change = macro_data["20Y Price (TLT)"]
         color = "normal" if change > 0 else "inverse"
-        st.metric("📉 美債20年ETF (TLT)", f"{price:.2f}", f"{change:.2f}", delta_color=color)
-    else: st.metric("📉 美債20年ETF (TLT)", "N/A", "N/A")
+        st.metric("📉 美債20年價格(TLT)", f"{price:.2f}", f"{change:.2f}", delta_color=color)
+    else: st.metric("📉 美債20年價格(TLT)", "N/A", "N/A")
 
-with m4:
+with m5: # 20Y 殖利率 (TLT Yield)
+    if "20Y Yield" in macro_data:
+        yield_val = macro_data["20Y Yield"]
+        st.metric("💰 美債20年殖利率", f"{yield_val:.2f}%")
+    else: st.metric("💰 美債20年殖利率", "N/A")
+
+with m6:
     st.write("")
     if st.button("🔄 更新總經"): st.rerun()
 
-# --- 介面分頁 ---
+# --- 介面分頁 (Tab 1~7 保持 V18.4 內容，請務必複製貼上！) ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
+
+# ... (為了節省篇幅，請將 Tab 1~7 的完整程式碼貼於此處) ...
+# 請使用 V18.4 的 Tab 1-7 代碼，這裡省略
 
 with tab1:
     if selected_code:
