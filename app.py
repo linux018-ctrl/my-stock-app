@@ -17,7 +17,7 @@ from datetime import datetime
 
 # --- 網頁設定 ---
 st.set_page_config(page_title="艾倫杭特 V21.0", layout="wide")
-st.title("📈 艾倫杭特 V21.0 - 終極穩定版")
+st.title("📈 艾倫杭特 V21.0 - 資金流向熱力版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -98,6 +98,7 @@ if 'watchlist' not in st.session_state: st.session_state.watchlist = load_watchl
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
 if 'scan_result_tab4' not in st.session_state: st.session_state.scan_result_tab4 = None
+if 'scan_result_tab8' not in st.session_state: st.session_state.scan_result_tab8 = None # V21.0 新增
 if 'ai_data' not in st.session_state: st.session_state.ai_data = None
 if 'sb_selected_code' not in st.session_state:
     if st.session_state.watchlist: st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
@@ -367,12 +368,13 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
-# --- Header: 即時報價 ---
+# --- Header: 即時報價 + V19.3 總經戰情 ---
 stock_name = st.session_state.watchlist.get(selected_code, selected_code)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
 with c_head2:
     if st.button("🔄 立即更新報價"): st.rerun()
+
 rt_data, raw_json = get_realtime_quote_fugle(selected_code)
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
@@ -427,7 +429,7 @@ with m6:
     if st.button("🔄 更新總經"): st.rerun()
 
 # --- 介面分頁 ---
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權", "🌊 資金流向儀表板"])
 
 with tab1:
     if selected_code:
@@ -691,14 +693,7 @@ with tab5:
                     if row['動作'] == '買進': return ['background-color: rgba(144, 238, 144, 0.3)'] * len(row)
                     elif row['動作'] == '賣出': return ['background-color: rgba(255, 99, 71, 0.3)'] * len(row)
                     return [''] * len(row)
-                st.dataframe(
-                    trade_df.style.apply(highlight_trade, axis=1), 
-                    use_container_width=True,
-                    column_config={
-                        "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"),
-                        "損益": st.column_config.NumberColumn(format="$%d")
-                    }
-                )
+                st.dataframe(trade_df.style.apply(highlight_trade, axis=1), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"), "損益": st.column_config.NumberColumn(format="$%d")})
             else: st.warning("此期間內無符合策略的交易訊號。")
             st.subheader("📈 資產累積曲線")
             fig = go.Figure()
@@ -725,13 +720,7 @@ with tab5:
             pk_df = pd.DataFrame(pk_results).sort_values(by="報酬率(%)", ascending=False)
             winner = pk_df.iloc[0]
             st.success(f"🏆 獲勝策略：**{winner['策略名稱']}** (報酬率 {winner['報酬率(%)']}%)")
-            st.dataframe(
-                pk_df.style.applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['報酬率(%)']),
-                use_container_width=True,
-                column_config={
-                    "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%")
-                }
-            )
+            st.dataframe(pk_df.style.applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['報酬率(%)']), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%")})
             st.markdown("### 📝 策略邏輯與詳細交易紀錄")
             for index, row in pk_df.iterrows():
                 strat_name = row['策略名稱']
@@ -744,14 +733,7 @@ with tab5:
                             if row['動作'] == '買進': return ['background-color: rgba(144, 238, 144, 0.3)'] * len(row)
                             elif row['動作'] == '賣出': return ['background-color: rgba(255, 99, 71, 0.3)'] * len(row)
                             return [''] * len(row)
-                        st.dataframe(
-                            t_log.style.apply(highlight_trade, axis=1),
-                            use_container_width=True,
-                            column_config={
-                                "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"),
-                                "損益": st.column_config.NumberColumn(format="$%d")
-                            }
-                        )
+                        st.dataframe(t_log.style.apply(highlight_trade, axis=1), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"), "損益": st.column_config.NumberColumn(format="$%d")})
                     else: st.caption("此策略在測試期間內無交易訊號。")
         else: st.error("無法取得歷史數據。")
 
@@ -785,6 +767,122 @@ with tab6:
         importance_df = pd.DataFrame({"指標": ai['feature_names'], "重要性": ai['importances']})
         importance_df = importance_df.sort_values(by="重要性", ascending=False)
         col2.dataframe(importance_df, use_container_width=True, hide_index=True)
+
+# V21.0 新增：資金流向儀表板
+with tab8:
+    st.subheader("🌊 資金流向儀表板 - 誰在吸金？")
+    st.info("分析各族群今日的【平均漲跌幅】與【成交量】，找出資金流入的強勢板塊。")
+    
+    if st.button("🚀 啟動資金流向分析"):
+        sector_data = []
+        progress_bar = st.progress(0)
+        total_sectors = len(SECTOR_DICT)
+        
+        for i, (sector_name, codes) in enumerate(SECTOR_DICT.items()):
+            # 批量下載該族群所有股票的今日數據 (Batch download is faster)
+            tickers_str = " ".join([f"{c}.TW" for c in codes])
+            try:
+                # 使用 yfinance 批量下載，只抓 1 天
+                # group_by='ticker' 讓資料結構好處理
+                data = yf.download(tickers_str, period="1d", group_by='ticker', progress=False)
+                
+                sector_changes = []
+                sector_volume = 0
+                top_gainer = {"code": "", "change": -100}
+                
+                # 處理批量下載的資料
+                # 如果只有一支股票，data 的結構會不同，需判斷
+                if len(codes) == 1:
+                    # 單支股票結構
+                    if not data.empty:
+                        change = ((data['Close'].iloc[-1] - data['Open'].iloc[-1]) / data['Open'].iloc[-1]) * 100
+                        sector_changes.append(change)
+                        sector_volume += data['Volume'].iloc[-1]
+                        top_gainer = {"code": codes[0], "change": change}
+                else:
+                    # 多支股票結構
+                    for code in codes:
+                        ticker = f"{code}.TW"
+                        try:
+                            if ticker in data.columns.levels[0]: # 檢查是否有抓到
+                                stock_df = data[ticker]
+                                if not stock_df.empty:
+                                    # 計算漲跌幅 (收盤 - 開盤 / 開盤) * 100
+                                    # 注意：這裡用 Intraday change，如果要用昨日收盤需抓 2d
+                                    # 為了速度簡化，暫用今日走勢
+                                    close = stock_df['Close'].iloc[-1]
+                                    open_p = stock_df['Open'].iloc[-1]
+                                    vol = stock_df['Volume'].iloc[-1]
+                                    
+                                    if not pd.isna(close) and not pd.isna(open_p) and open_p > 0:
+                                        change = ((close - open_p) / open_p) * 100
+                                        sector_changes.append(change)
+                                        sector_volume += vol
+                                        
+                                        if change > top_gainer['change']:
+                                            top_gainer = {"code": code, "change": change}
+                        except: pass
+                
+                if sector_changes:
+                    avg_change = sum(sector_changes) / len(sector_changes)
+                    # 嘗試找領頭羊名稱
+                    leader_name = STOCK_NAMES.get(top_gainer['code'], top_gainer['code'])
+                    
+                    sector_data.append({
+                        "族群": sector_name,
+                        "平均漲跌幅(%)": avg_change,
+                        "總成交量": sector_volume,
+                        "領頭羊": f"{leader_name} (+{round(top_gainer['change'], 2)}%)"
+                    })
+            except Exception as e:
+                # print(e) 
+                pass
+            
+            progress_bar.progress((i + 1) / total_sectors)
+        
+        progress_bar.empty()
+        
+        if sector_data:
+            # 轉成 DataFrame 並排序
+            df_sector = pd.DataFrame(sector_data).sort_values(by="平均漲跌幅(%)", ascending=False)
+            
+            # 存入 State
+            st.session_state.scan_result_tab8 = df_sector
+    
+    # 顯示結果
+    if st.session_state.scan_result_tab8 is not None:
+        df_show = st.session_state.scan_result_tab8
+        
+        # 1. 熱力圖 (Bar Chart)
+        st.markdown("### 🔥 族群強弱排行")
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df_show['族群'],
+            y=df_show['平均漲跌幅(%)'],
+            marker_color=['red' if x > 0 else 'green' for x in df_show['平均漲跌幅(%)']]
+        ))
+        fig.update_layout(title="各族群平均漲跌幅 (紅漲綠跌)", xaxis_tickangle=-45)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # 2. 詳細數據表
+        st.markdown("### 📋 詳細數據")
+        st.dataframe(
+            df_show.style.applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['平均漲跌幅(%)']),
+            column_config={
+                "平均漲跌幅(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                "總成交量": st.column_config.NumberColumn(format="%d")
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # 3. LINE 發送
+        if st.button("📤 將資金流向報告傳送到 LINE"):
+            top3 = df_show.head(3)
+            msg = "🌊 【資金流向快報】今日強勢族群：\n"
+            for i, row in top3.iterrows():
+                msg += f"🔥 {row['族群']}: {row['平均漲跌幅(%)']:.2f}%\n   (領頭: {row['領頭羊']})\n"
+            send_line_message(msg)
 
 with tab7:
     st.subheader("🕵️‍♂️ 籌碼與股權透視 - 追蹤大戶動向")
