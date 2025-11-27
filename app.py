@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V20.0", layout="wide")
-st.title("📈 艾倫杭特 V20.0 - 智能名稱查詢版")
+st.set_page_config(page_title="艾倫杭特 V20.1", layout="wide")
+st.title("📈 艾倫杭特 V20.1 - 互動邏輯修復版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -59,7 +59,7 @@ def save_watchlist(data):
         with open(WATCHLIST_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
     except: pass
 
-# --- 0.1 中文名稱對照表 (保留作為備用) ---
+# --- 0.1 中文名稱對照表 ---
 STOCK_NAMES = {
     "2330":"台積電", "2317":"鴻海", "2454":"聯發科", "2308":"台達電", "2303":"聯電", 
     "2881":"富邦金", "2882":"國泰金", "2412":"中華電", "1303":"南亞", "2002":"中鋼",
@@ -93,7 +93,7 @@ STOCK_NAMES = {
     "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
 }
 
-# --- State ---
+# --- 1. 初始化 Session State ---
 if 'watchlist' not in st.session_state: st.session_state.watchlist = load_watchlist()
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
@@ -103,16 +103,28 @@ if 'sb_selected_code' not in st.session_state:
     if st.session_state.watchlist: st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
     else: st.session_state.sb_selected_code = "2330"
 
+# ==========================================
+# 🛠️ [V20.1 關鍵] 狀態管理中樞 (必須在側邊欄繪製前執行)
+# ==========================================
 if 'pending_update' in st.session_state and st.session_state.pending_update:
     update_data = st.session_state.pending_update
-    new_code = update_data['code']; new_name = update_data['name']
+    new_code = update_data['code']
+    new_name = update_data['name']
+    
+    # 1. 確保在名單中
     if new_code not in st.session_state.watchlist:
-        st.session_state.watchlist[new_code] = new_name; save_watchlist(st.session_state.watchlist)
+        st.session_state.watchlist[new_code] = new_name
+        save_watchlist(st.session_state.watchlist)
+    
+    # 2. 更新選單指標 (這是最重要的一步)
     st.session_state.sb_selected_code = new_code
-    st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
+    
+    st.toast(f"✅ 已鎖定：{new_name} ({new_code})，請查看儀表板", icon="🎉")
+    
+    # 3. 清除指令，避免無限迴圈
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (略) ---
+# --- SECTOR_DICT (略，保持不變) ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -139,46 +151,35 @@ SECTOR_DICT = {
     "你的觀察名單": [] 
 }
 
-# --- V20.0: 新增 Fugle 名稱查詢 helper ---
+# --- Fugle 名稱查詢 ---
 def get_name_from_fugle(code):
     if not fugle_client: return None
     try:
-        # 使用 intraday.ticker 取得股票基本資料
         ticker_info = fugle_client.stock.intraday.ticker(symbol=code)
-        if ticker_info:
-            return ticker_info.get('name')
-    except:
-        return None
+        if ticker_info: return ticker_info.get('name')
+    except: return None
 
-# --- 側邊欄：名單管理 (V20.0 優化) ---
+# --- 側邊欄：名單管理 ---
 st.sidebar.header("📝 觀察名單管理")
 with st.sidebar.expander("新增/移除個股"):
     def auto_fill_name():
         code = st.session_state.input_code
         if code:
-            # 1. 優先使用 Fugle API (最準確)
             fugle_name = get_name_from_fugle(code)
-            if fugle_name:
-                st.session_state.input_name = fugle_name
-            # 2. 備用：查內建字典
-            elif code in STOCK_NAMES:
-                st.session_state.input_name = STOCK_NAMES[code]
-            # 3. 最後手段：Yahoo
+            if fugle_name: st.session_state.input_name = fugle_name
+            elif code in STOCK_NAMES: st.session_state.input_name = STOCK_NAMES[code]
             else:
                 try:
                     t = yf.Ticker(f"{code}.TW"); name = t.info.get('longName') or t.info.get('shortName')
                     if not name: t = yf.Ticker(f"{code}.TWO"); name = t.info.get('longName') or t.info.get('shortName')
                     if name: st.session_state.input_name = name
                 except: pass
-
     c1, c2 = st.columns(2)
     new_code = c1.text_input("代號", placeholder="2395", key="input_code", on_change=auto_fill_name)
     new_name = c2.text_input("名稱", placeholder="自動帶入...", key="input_name")
-    
     if st.button("➕ 新增"):
         if new_code and new_name:
             st.session_state.watchlist[new_code] = new_name; save_watchlist(st.session_state.watchlist); st.rerun()
-            
     remove_target = st.selectbox("移除股票", options=list(st.session_state.watchlist.keys()), format_func=lambda x: f"{x} {st.session_state.watchlist[x]}")
     if st.button("➖ 移除"):
         if remove_target in st.session_state.watchlist:
@@ -189,7 +190,15 @@ with st.sidebar.expander("新增/移除個股"):
 
 st.sidebar.markdown("---")
 st.sidebar.header("📊 個股參數")
-selected_code = st.sidebar.selectbox("選擇個股", options=list(st.session_state.watchlist.keys()), format_func=lambda x: f"{x} {st.session_state.watchlist[x]}", key="sb_selected_code")
+
+# 關鍵：側邊欄的 selectbox 必須綁定 key="sb_selected_code"
+selected_code = st.sidebar.selectbox(
+    "選擇個股", 
+    options=list(st.session_state.watchlist.keys()), 
+    format_func=lambda x: f"{x} {st.session_state.watchlist[x]}", 
+    key="sb_selected_code"
+)
+
 timeframe = st.sidebar.selectbox("K線週期", ["日K", "週K", "月K", "季K"])
 interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
@@ -214,9 +223,9 @@ def get_realtime_quote_fugle(code):
             if price is not None and change is not None:
                 prev_close = price - change
                 if prev_close > 0: pct_change = (change / prev_close) * 100
-            open_p = safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open')) or safe_float(quote.get('total', {}).get('open'))
-            high_p = safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high')) or safe_float(quote.get('total', {}).get('high'))
-            low_p = safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low')) or safe_float(quote.get('total', {}).get('low'))
+            open_p = safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open'))
+            high_p = safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high'))
+            low_p = safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low'))
             time_str = quote.get('lastUpdated')
             try:
                 dt_object = datetime.fromtimestamp(time_str / 1000000)
@@ -229,7 +238,7 @@ def get_realtime_quote_fugle(code):
     except Exception as e: return None, str(e)
     return None, None
 
-# --- V19.5: 取得總經數據 ---
+# --- V19.3: 取得總經數據 ---
 def get_macro_data():
     data = {}
     tickers = {"USD/TWD": "TWD=X", "10Y Yield": "^TNX", "20Y Price (TLT)": "TLT"}
@@ -245,7 +254,6 @@ def get_macro_data():
                         data['20Y Yield'] = yield_val * 100
                     except: pass
         except: pass
-    # 補抓 IEF
     try:
         t = yf.Ticker("IEF"); hist = t.history(period="5d")
         if not hist.empty:
@@ -379,7 +387,7 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
-# --- Header: 即時報價 + V19.3 總經戰情 ---
+# --- Header: 即時報價 ---
 stock_name = st.session_state.watchlist.get(selected_code, selected_code)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
@@ -441,9 +449,6 @@ with m6:
 
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
-
-# Tab 1-7 (保持 V18.4/V19.5 內容，請務必完整複製並貼上)
-# 以下為 Tab 1 範例，其他 Tab 請自行補齊
 
 with tab1:
     if selected_code:
@@ -542,6 +547,7 @@ with tab2:
                         macd_col = df_scan.columns[df_scan.columns.str.startswith('MACDh')][0]
                         cond_macd = latest[macd_col] > 0
                         cond_align = latest['SMA5'] > latest['SMA20'] > latest['SMA60']
+                        # V18.4/V20.1: 拆解長代碼
                         item = {
                             "代號": code, "名稱": name, "收盤價": latest['Close'], 
                             "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, 
