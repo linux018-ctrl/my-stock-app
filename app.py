@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V19.2", layout="wide")
-st.title("📈 艾倫杭特 V19.2 - 總經戰情全覽版")
+st.set_page_config(page_title="艾倫杭特 V19.3", layout="wide")
+st.title("📈 艾倫杭特 V19.3 - 總經數據修復版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -112,7 +112,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (略，保持 V16.0 內容) ---
+# --- SECTOR_DICT (保持 V16.0 內容) ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -209,29 +209,40 @@ def get_realtime_quote_fugle(code):
     except Exception as e: return None, str(e)
     return None, None
 
-# --- V19.2: 取得總經數據 (匯率 + 美債) ---
+# --- V19.3: 取得總經數據 (獨立抓取 + 強制格式化) ---
 def get_macro_data():
-    # 定義我們要抓的指標
-    # ^TNX: 10年期公債殖利率 (Yield)
-    # TLT: 20年期以上公債 ETF (Price)
-    # TWD=X: 美元兌台幣匯率
-    tickers = {
-        "USD/TWD": "TWD=X",
-        "10Y Yield": "^TNX", 
-        "20Y Price (TLT)": "TLT"
-    }
-    data_dict = {}
+    data = {}
+    # 1. USD/TWD
     try:
-        for name, symbol in tickers.items():
-            t = yf.Ticker(symbol)
-            hist = t.history(period="2d") # 抓2天算漲跌
-            if not hist.empty:
-                price = hist['Close'].iloc[-1]
-                prev = hist['Close'].iloc[-2]
-                change = price - prev
-                data_dict[name] = (price, change)
+        t = yf.Ticker("TWD=X")
+        hist = t.history(period="2d")
+        if not hist.empty:
+            now = hist['Close'].iloc[-1]
+            prev = hist['Close'].iloc[-2]
+            data['USD/TWD'] = (now, now - prev)
     except: pass
-    return data_dict
+
+    # 2. 10Y Yield (^TNX)
+    try:
+        t = yf.Ticker("^TNX")
+        hist = t.history(period="2d")
+        if not hist.empty:
+            now = hist['Close'].iloc[-1]
+            prev = hist['Close'].iloc[-2]
+            data['10Y Yield'] = (now, now - prev)
+    except: pass
+    
+    # 3. 20Y ETF (TLT)
+    try:
+        t = yf.Ticker("TLT")
+        hist = t.history(period="2d")
+        if not hist.empty:
+            now = hist['Close'].iloc[-1]
+            prev = hist['Close'].iloc[-2]
+            data['TLT'] = (now, now - prev)
+    except: pass
+
+    return data
 
 # --- 核心功能區 ---
 def get_stock_data(symbol, bars=200, interval="1d"):
@@ -369,7 +380,9 @@ with c_head2:
 rt_data, raw_json = get_realtime_quote_fugle(selected_code)
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
-    price = rt_data.get('price', '—'); change = rt_data.get('change', '—'); pct = rt_data.get('changePercent', '—')
+    price = rt_data.get('price', '—')
+    change = rt_data.get('change', '—')
+    pct = rt_data.get('changePercent', '—')
     r1.metric("成交價", f"{price}", f"{change} ({pct}%)")
     r2.metric("開盤", rt_data.get('open', '—')); r3.metric("最高", rt_data.get('high', '—')); r4.metric("最低", rt_data.get('low', '—'))
     st.caption(f"✅ 資料來源：Fugle 富果 API (更新時間: {rt_data.get('time', 'N/A')})")
@@ -381,41 +394,50 @@ with st.expander("🔍 [開發者模式] 查看 API 原始回傳資料 (Raw JSON
 
 st.markdown("---")
 
-# V19.2: 總經戰情區 (含手動更新按鈕)
+# V19.3: 總經戰情區 (含小數點修復與容錯)
 st.markdown("### 🌎 國際總經戰情室 (更新按鈕在右側)")
 macro_data = get_macro_data()
 
-if macro_data:
-    m1, m2, m3, m4 = st.columns([1, 1, 1, 0.5]) # 調整欄寬
-    
-    # 1. 匯率
+m1, m2, m3, m4 = st.columns([1, 1, 1, 0.5]) # 固定顯示欄位
+
+# 1. 匯率
+with m1:
     if "USD/TWD" in macro_data:
         rate, change = macro_data["USD/TWD"]
         color = "inverse" if change > 0 else "normal" # 漲=紅(貶值)
-        m1.metric("🇺🇸 美元兌台幣", f"{rate}", f"{change}", delta_color=color)
-    
-    # 2. 10年期公債殖利率
+        st.metric("🇺🇸 美元兌台幣", f"{rate:.2f}", f"{change:.2f}", delta_color=color) # 強制2位小數
+    else:
+        st.metric("🇺🇸 美元兌台幣", "N/A", "N/A")
+
+# 2. 10年期公債殖利率
+with m2:
     if "10Y Yield" in macro_data:
         rate, change = macro_data["10Y Yield"]
         color = "inverse" if change > 0 else "normal" # 漲=紅(資金緊縮)
-        m2.metric("🏦 美債10年殖利率", f"{rate}%", f"{change}", delta_color=color)
+        st.metric("🏦 美債10年殖利率", f"{rate:.2f}%", f"{change:.2f}", delta_color=color)
+    else:
+        st.metric("🏦 美債10年殖利率", "N/A", "N/A")
 
-    # 3. 20年期公債價格 (TLT)
-    if "20Y Price (TLT)" in macro_data:
-        price, change = macro_data["20Y Price (TLT)"]
+# 3. 20年期公債價格 (TLT)
+with m3:
+    if "TLT" in macro_data:
+        price, change = macro_data["TLT"]
         color = "normal" if change > 0 else "inverse" # 漲=紅(避險/降息預期)
-        m3.metric("📉 美債20年價格(TLT)", f"{price}", f"{change}", delta_color=color)
-    
-    with m4:
-        st.write("") # Spacer
-        if st.button("🔄 更新總經"): st.rerun()
-else:
-    st.warning("無法取得總經數據，請檢查網路連線。")
+        st.metric("📉 美債20年ETF (TLT)", f"{price:.2f}", f"{change:.2f}", delta_color=color)
+    else:
+        st.metric("📉 美債20年ETF (TLT)", "N/A", "N/A")
 
-# --- 介面分頁 (Tab 1~7 保持 V16.4/V17.3 內容，略) ---
-# 為了確保程式能跑，請務必將之前版本的 Tab 1~7 完整貼於此處
+with m4:
+    st.write("") # Spacer
+    if st.button("🔄 更新總經"): st.rerun()
+
+# --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權"])
 
+# ... (Tab 1~7 內容與 V19.1 相同，為節省篇幅，請直接複製前面的完整 Tab 1-7 代碼) ...
+# 重要：請務必將 Tab 1~7 的完整內容貼在此處
+# 為了確保您的程式能跑，請從 V19.1 / V17.3 複製 Tab 1~7 的完整代碼貼過來！
+# 以下僅為 Tab 1 範例，其他請補齊
 with tab1:
     if selected_code:
         data, ticker_obj = get_stock_data(selected_code, lookback_bars, yf_interval)
@@ -516,7 +538,6 @@ with tab2:
             progress_bar.progress((i+1)/total)
         progress.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
-
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
@@ -567,16 +588,13 @@ with tab3:
             progress.progress((i+1)/total_scan)
         progress.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
-
     if st.session_state.scan_result_tab3 is not None and not st.session_state.scan_result_tab3.empty:
         rev_df = st.session_state.scan_result_tab3
         st.success(f"發現 {len(rev_df)} 檔潛在轉折股！")
         if st.button("📤 將轉折清單傳送到 LINE (Tab3)"):
             msg = f"🔥 【轉折獵人】發現 {len(rev_df)} 檔潛力股\n板塊：{target_sector}\n"
-            for index, row in rev_df.iterrows():
-                msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n   理由：{row['觸發條件']}\n"
+            for index, row in rev_df.iterrows(): msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n   理由：{row['觸發條件']}\n"
             send_line_message(msg)
-
         event = st.dataframe(rev_df, column_config={"收盤價": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True, on_select="rerun", selection_mode="single-row")
         if event.selection.rows:
             selected_index = event.selection.rows[0]
