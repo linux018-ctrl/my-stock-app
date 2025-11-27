@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V20.1", layout="wide")
-st.title("📈 艾倫杭特 V20.1 - 互動邏輯修復版")
+st.set_page_config(page_title="艾倫杭特 V20.2", layout="wide")
+st.title("📈 艾倫杭特 V20.2 - 穩定修復版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -93,7 +93,7 @@ STOCK_NAMES = {
     "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
 }
 
-# --- 1. 初始化 Session State ---
+# --- State ---
 if 'watchlist' not in st.session_state: st.session_state.watchlist = load_watchlist()
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
@@ -103,28 +103,16 @@ if 'sb_selected_code' not in st.session_state:
     if st.session_state.watchlist: st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
     else: st.session_state.sb_selected_code = "2330"
 
-# ==========================================
-# 🛠️ [V20.1 關鍵] 狀態管理中樞 (必須在側邊欄繪製前執行)
-# ==========================================
 if 'pending_update' in st.session_state and st.session_state.pending_update:
     update_data = st.session_state.pending_update
-    new_code = update_data['code']
-    new_name = update_data['name']
-    
-    # 1. 確保在名單中
+    new_code = update_data['code']; new_name = update_data['name']
     if new_code not in st.session_state.watchlist:
-        st.session_state.watchlist[new_code] = new_name
-        save_watchlist(st.session_state.watchlist)
-    
-    # 2. 更新選單指標 (這是最重要的一步)
+        st.session_state.watchlist[new_code] = new_name; save_watchlist(st.session_state.watchlist)
     st.session_state.sb_selected_code = new_code
-    
-    st.toast(f"✅ 已鎖定：{new_name} ({new_code})，請查看儀表板", icon="🎉")
-    
-    # 3. 清除指令，避免無限迴圈
+    st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (略，保持不變) ---
+# --- SECTOR_DICT ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -190,15 +178,7 @@ with st.sidebar.expander("新增/移除個股"):
 
 st.sidebar.markdown("---")
 st.sidebar.header("📊 個股參數")
-
-# 關鍵：側邊欄的 selectbox 必須綁定 key="sb_selected_code"
-selected_code = st.sidebar.selectbox(
-    "選擇個股", 
-    options=list(st.session_state.watchlist.keys()), 
-    format_func=lambda x: f"{x} {st.session_state.watchlist[x]}", 
-    key="sb_selected_code"
-)
-
+selected_code = st.sidebar.selectbox("選擇個股", options=list(st.session_state.watchlist.keys()), format_func=lambda x: f"{x} {st.session_state.watchlist[x]}", key="sb_selected_code")
 timeframe = st.sidebar.selectbox("K線週期", ["日K", "週K", "月K", "季K"])
 interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
@@ -238,7 +218,7 @@ def get_realtime_quote_fugle(code):
     except Exception as e: return None, str(e)
     return None, None
 
-# --- V19.3: 取得總經數據 ---
+# --- V19.5: 取得總經數據 ---
 def get_macro_data():
     data = {}
     tickers = {"USD/TWD": "TWD=X", "10Y Yield": "^TNX", "20Y Price (TLT)": "TLT"}
@@ -393,7 +373,6 @@ c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
 with c_head2:
     if st.button("🔄 立即更新報價"): st.rerun()
-
 rt_data, raw_json = get_realtime_quote_fugle(selected_code)
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
@@ -547,7 +526,6 @@ with tab2:
                         macd_col = df_scan.columns[df_scan.columns.str.startswith('MACDh')][0]
                         cond_macd = latest[macd_col] > 0
                         cond_align = latest['SMA5'] > latest['SMA20'] > latest['SMA60']
-                        # V18.4/V20.1: 拆解長代碼
                         item = {
                             "代號": code, "名稱": name, "收盤價": latest['Close'], 
                             "漲幅%": ((latest['Close'] - prev['Close']) / prev['Close']) * 100, 
@@ -623,12 +601,14 @@ with tab3:
             progress.progress((i+1)/total_scan)
         progress.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
+
     if st.session_state.scan_result_tab3 is not None and not st.session_state.scan_result_tab3.empty:
         rev_df = st.session_state.scan_result_tab3
         st.success(f"發現 {len(rev_df)} 檔潛在轉折股！")
         if st.button("📤 將轉折清單傳送到 LINE (Tab3)"):
             msg = f"🔥 【轉折獵人】發現 {len(rev_df)} 檔潛力股\n板塊：{target_sector}\n"
-            for index, row in rev_df.iterrows(): msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n   理由：{row['觸發條件']}\n"
+            for index, row in rev_df.iterrows():
+                msg += f"✅ {row['名稱']} ({row['代號']}) - {row['收盤價']}\n   理由：{row['觸發條件']}\n"
             send_line_message(msg)
         event = st.dataframe(rev_df, column_config={"收盤價": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True, on_select="rerun", selection_mode="single-row")
         if event.selection.rows:
@@ -713,7 +693,14 @@ with tab5:
                     if row['動作'] == '買進': return ['background-color: rgba(144, 238, 144, 0.3)'] * len(row)
                     elif row['動作'] == '賣出': return ['background-color: rgba(255, 99, 71, 0.3)'] * len(row)
                     return [''] * len(row)
-                st.dataframe(trade_df.style.apply(highlight_trade, axis=1), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"), "損益": st.column_config.NumberColumn(format="$%d")})
+                st.dataframe(
+                    trade_df.style.apply(highlight_trade, axis=1), 
+                    use_container_width=True,
+                    column_config={
+                        "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                        "損益": st.column_config.NumberColumn(format="$%d")
+                    }
+                )
             else: st.warning("此期間內無符合策略的交易訊號。")
             st.subheader("📈 資產累積曲線")
             fig = go.Figure()
@@ -740,7 +727,13 @@ with tab5:
             pk_df = pd.DataFrame(pk_results).sort_values(by="報酬率(%)", ascending=False)
             winner = pk_df.iloc[0]
             st.success(f"🏆 獲勝策略：**{winner['策略名稱']}** (報酬率 {winner['報酬率(%)']}%)")
-            st.dataframe(pk_df.style.applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['報酬率(%)']), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%")})
+            st.dataframe(
+                pk_df.style.applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['報酬率(%)']),
+                use_container_width=True,
+                column_config={
+                    "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%")
+                }
+            )
             st.markdown("### 📝 策略邏輯與詳細交易紀錄")
             for index, row in pk_df.iterrows():
                 strat_name = row['策略名稱']
@@ -753,7 +746,14 @@ with tab5:
                             if row['動作'] == '買進': return ['background-color: rgba(144, 238, 144, 0.3)'] * len(row)
                             elif row['動作'] == '賣出': return ['background-color: rgba(255, 99, 71, 0.3)'] * len(row)
                             return [''] * len(row)
-                        st.dataframe(t_log.style.apply(highlight_trade, axis=1), use_container_width=True, column_config={"報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"), "損益": st.column_config.NumberColumn(format="$%d")})
+                        st.dataframe(
+                            t_log.style.apply(highlight_trade, axis=1),
+                            use_container_width=True,
+                            column_config={
+                                "報酬率(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                                "損益": st.column_config.NumberColumn(format="$%d")
+                            }
+                        )
                     else: st.caption("此策略在測試期間內無交易訊號。")
         else: st.error("無法取得歷史數據。")
 
