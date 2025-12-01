@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V20.3", layout="wide")
-st.title("📈 艾倫杭特 V20.3 - 報價全顯修復版")
+st.set_page_config(page_title="艾倫杭特 V22.0", layout="wide")
+st.title("📈 艾倫杭特 V22.0 - 完美合體版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -40,26 +40,34 @@ def send_line_message(message_text):
     try: requests.post(url, headers=headers, data=json.dumps(payload))
     except: pass
 
-# --- 資料存取 ---
+# ==========================================
+# 💾 資料存取 (JSON 存檔功能回歸)
+# ==========================================
 WATCHLIST_FILE = 'watchlist.json'
 DEFAULT_WATCHLIST = {
     "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2364": "倫飛",
     "3005": "神基", "2382": "廣達", "3231": "緯創", "2603": "長榮",
     "3004": "豐達科", "2850": "新產"
 }
+
 def load_watchlist():
+    """優先從 JSON 讀取，若無則使用預設"""
     if os.path.exists(WATCHLIST_FILE):
         try:
-            with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f: return json.load(f)
-        except: return DEFAULT_WATCHLIST.copy()
+            with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return DEFAULT_WATCHLIST.copy()
     return DEFAULT_WATCHLIST.copy()
 
 def save_watchlist(data):
+    """將變更寫入 JSON"""
     try:
-        with open(WATCHLIST_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
+        with open(WATCHLIST_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
     except: pass
 
-# --- 0.1 中文名稱對照表 ---
+# --- 0.1 中文名稱對照表 (備用) ---
 STOCK_NAMES = {
     "2330":"台積電", "2317":"鴻海", "2454":"聯發科", "2308":"台達電", "2303":"聯電", 
     "2881":"富邦金", "2882":"國泰金", "2412":"中華電", "1303":"南亞", "2002":"中鋼",
@@ -93,8 +101,10 @@ STOCK_NAMES = {
     "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
 }
 
-# --- State ---
-if 'watchlist' not in st.session_state: st.session_state.watchlist = load_watchlist()
+# --- 1. 初始化 Session State ---
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = load_watchlist() # 使用 V14 記憶載入
+
 if 'scan_result_tab2' not in st.session_state: st.session_state.scan_result_tab2 = None
 if 'scan_result_tab3' not in st.session_state: st.session_state.scan_result_tab3 = None
 if 'scan_result_tab4' not in st.session_state: st.session_state.scan_result_tab4 = None
@@ -104,13 +114,17 @@ if 'sb_selected_code' not in st.session_state:
     if st.session_state.watchlist: st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
     else: st.session_state.sb_selected_code = "2330"
 
+# ==========================================
+# 🛠️ 狀態管理中樞 (含存檔)
+# ==========================================
 if 'pending_update' in st.session_state and st.session_state.pending_update:
     update_data = st.session_state.pending_update
     new_code = update_data['code']; new_name = update_data['name']
     if new_code not in st.session_state.watchlist:
-        st.session_state.watchlist[new_code] = new_name; save_watchlist(st.session_state.watchlist)
+        st.session_state.watchlist[new_code] = new_name
+        save_watchlist(st.session_state.watchlist) # 寫入存檔
     st.session_state.sb_selected_code = new_code
-    st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
+    st.toast(f"✅ 已鎖定：{new_name} ({new_code})，請查看儀表板", icon="🎉")
     st.session_state.pending_update = None
 
 # --- SECTOR_DICT ---
@@ -166,13 +180,21 @@ with st.sidebar.expander("新增/移除個股"):
     c1, c2 = st.columns(2)
     new_code = c1.text_input("代號", placeholder="2395", key="input_code", on_change=auto_fill_name)
     new_name = c2.text_input("名稱", placeholder="自動帶入...", key="input_name")
+    
+    # 新增功能：寫入 JSON
     if st.button("➕ 新增"):
         if new_code and new_name:
-            st.session_state.watchlist[new_code] = new_name; save_watchlist(st.session_state.watchlist); st.rerun()
+            st.session_state.watchlist[new_code] = new_name
+            save_watchlist(st.session_state.watchlist) # 存檔
+            st.success(f"已新增 {new_name} ({new_code})")
+            st.rerun()
+
     remove_target = st.selectbox("移除股票", options=list(st.session_state.watchlist.keys()), format_func=lambda x: f"{x} {st.session_state.watchlist[x]}")
+    # 移除功能：寫入 JSON
     if st.button("➖ 移除"):
         if remove_target in st.session_state.watchlist:
-            del st.session_state.watchlist[remove_target]; save_watchlist(st.session_state.watchlist)
+            del st.session_state.watchlist[remove_target]
+            save_watchlist(st.session_state.watchlist) # 存檔
             if remove_target == st.session_state.sb_selected_code:
                 if st.session_state.watchlist: st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
             st.rerun()
@@ -185,7 +207,7 @@ interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
 lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 150)
 
-# --- V18.2: 安全數值讀取 helper ---
+# --- V18.2+V20.3: 安全數值讀取 helper (報價全顯修復) ---
 def safe_float(val):
     try: return float(val)
     except: return None
@@ -205,7 +227,7 @@ def get_realtime_quote_fugle(code):
                 prev_close = price - change
                 if prev_close > 0: pct_change = (change / prev_close) * 100
             
-            # V20.3 修正：增加對 openPrice, highPrice, lowPrice 的支援
+            # V20.3 修復：多重路徑搜尋
             open_p = (safe_float(quote.get('openPrice')) or 
                       safe_float(quote.get('priceOpen', {}).get('price')) or 
                       safe_float(quote.get('open')) or 
@@ -233,7 +255,7 @@ def get_realtime_quote_fugle(code):
     except Exception as e: return None, str(e)
     return None, None
 
-# --- V19.5: 取得總經數據 ---
+# --- V19.5: 取得總經數據 (美債補完版) ---
 def get_macro_data():
     data = {}
     tickers = {"USD/TWD": "TWD=X", "10Y Yield": "^TNX", "20Y Price (TLT)": "TLT"}
@@ -254,6 +276,14 @@ def get_macro_data():
         if not hist.empty:
             now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; data['10Y Price (IEF)'] = (now, now - prev)
     except: pass
+    
+    # V21.2 新增: 30Y Yield
+    try:
+        t = yf.Ticker("^TYX"); hist = t.history(period="5d")
+        if not hist.empty:
+            now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; data['30Y Yield'] = (now, now - prev)
+    except: pass
+
     return data
 
 # --- 核心功能區 ---
@@ -388,6 +418,7 @@ c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
 with c_head2:
     if st.button("🔄 立即更新報價"): st.rerun()
+
 rt_data, raw_json = get_realtime_quote_fugle(selected_code)
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
@@ -433,10 +464,12 @@ with m4:
         st.metric("📉 美債20年價格(TLT)", f"{price:.2f}", f"{change:.2f}", delta_color=color)
     else: st.metric("📉 美債20年價格(TLT)", "N/A", "N/A")
 with m5:
-    if "20Y Yield" in macro_data:
-        yield_val = macro_data["20Y Yield"]
-        st.metric("💰 美債20年殖利率", f"{yield_val:.2f}%")
-    else: st.metric("💰 美債20年殖利率", "N/A")
+    # V21.2: 30Y Yield
+    if "30Y Yield" in macro_data:
+        rate, change = macro_data["30Y Yield"]
+        color = "inverse" if change > 0 else "normal"
+        st.metric("🏦 美債30年殖利率", f"{rate:.2f}%", f"{change:.2f}", delta_color=color)
+    else: st.metric("🏦 美債30年殖利率", "N/A", "N/A")
 with m6:
     st.write("")
     if st.button("🔄 更新總經"): st.rerun()
@@ -801,7 +834,6 @@ with tab6:
         importance_df = importance_df.sort_values(by="重要性", ascending=False)
         col2.dataframe(importance_df, use_container_width=True, hide_index=True)
 
-# Tab 7 & 8 (資金流向 + 籌碼)
 with tab7:
     st.subheader("🕵️‍♂️ 籌碼與股權透視 - 追蹤大戶動向")
     target_name = st.session_state.watchlist.get(selected_code, selected_code)
@@ -850,12 +882,13 @@ with tab7:
     c_link2.link_button(f"🐳 主力動向 (Goodinfo)", f"https://goodinfo.tw/tw/ShowK_Chart.asp?STOCK_ID={selected_code}&CHT_CAT2=DATE", icon="🌊")
     c_link3.link_button("🏛️ 集保結算所 (官方)", "https://www.tdcc.com.tw/portal/zh/smWeb/qryStock", icon="🇹🇼")
 
+# V21.0 分頁 8: 資金流向
 with tab8:
     st.subheader("🌊 資金流向儀表板 - 誰在吸金？")
     st.info("分析各族群今日的【平均漲跌幅】與【預估成交金額】，找出資金流入的強勢板塊。")
     if st.button("🚀 啟動資金流向分析"):
         sector_data = []
-        progress_bar = st.progress(0)
+        progress_bar = st.progress(0) # V21.0: 改名為 progress_bar
         total_sectors = len(SECTOR_DICT)
         for i, (sector_name, codes) in enumerate(SECTOR_DICT.items()):
             tickers_str = " ".join([f"{c}.TW" for c in codes])
