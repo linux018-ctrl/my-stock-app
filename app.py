@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V23.1", layout="wide")
-st.title("📈 艾倫杭特 V23.1 - 報價強力修復版")
+st.set_page_config(page_title="艾倫杭特 V23.2", layout="wide")
+st.title("📈 艾倫杭特 V23.2 - 報價精準修正版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
@@ -113,7 +113,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT ---
+# --- SECTOR_DICT (略) ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -185,11 +185,12 @@ interval_map = {"日K": "1d", "週K": "1wk", "月K": "1mo", "季K": "3mo"}
 yf_interval = interval_map[timeframe]
 lookback_bars = st.sidebar.slider(f"顯示 K 棒數量 ({timeframe})", 60, 365, 150)
 
-# --- V18.2/V23.1: 安全數值讀取 helper ---
+# --- V18.2: 安全數值讀取 helper ---
 def safe_float(val):
     try: return float(val)
     except: return None
 
+# --- V23.2: Fugle 報價 (欄位修正版) ---
 def get_realtime_quote_fugle(code):
     if not fugle_client: return None, None
     try:
@@ -197,40 +198,30 @@ def get_realtime_quote_fugle(code):
         quote = stock.intraday.quote(symbol=code)
         raw_json = quote
         if quote:
-            # 價格邏輯
+            # 價格: 優先取 lastTrade, 其次 trade
             price = safe_float(quote.get('lastTrade', {}).get('price'))
             if price is None: price = safe_float(quote.get('trade', {}).get('price'))
             
+            # 漲跌
             change = safe_float(quote.get('change'))
             pct_change = 0
             if price is not None and change is not None:
                 prev_close = price - change
                 if prev_close > 0: pct_change = (change / prev_close) * 100
             
-            # [V23.1 修正]: 暴力搜尋開高低
-            # 1. 嘗試 priceOpen (巢狀)
-            open_p = safe_float(quote.get('priceOpen', {}).get('price'))
-            if open_p is None: open_p = safe_float(quote.get('open')) # 嘗試 open (外層)
-            if open_p is None: open_p = safe_float(quote.get('total', {}).get('open')) # 嘗試 total (統計)
-
-            high_p = safe_float(quote.get('priceHigh', {}).get('price'))
-            if high_p is None: high_p = safe_float(quote.get('high'))
-            if high_p is None: high_p = safe_float(quote.get('total', {}).get('high'))
-
-            low_p = safe_float(quote.get('priceLow', {}).get('price'))
-            if low_p is None: low_p = safe_float(quote.get('low'))
-            if low_p is None: low_p = safe_float(quote.get('total', {}).get('low'))
-
-            # 時間
+            # [V23.2 修正]: 開高低 優先讀取 openPrice/highPrice/lowPrice (根據截圖)
+            open_p = safe_float(quote.get('openPrice')) or safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open'))
+            high_p = safe_float(quote.get('highPrice')) or safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high'))
+            low_p = safe_float(quote.get('lowPrice')) or safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low'))
+            
             time_str = quote.get('lastUpdated')
             try:
                 dt_object = datetime.fromtimestamp(time_str / 1000000)
                 time_str = dt_object.strftime("%H:%M:%S")
             except: pass
-            
             return {
                 "price": price, "change": change, "changePercent": round(pct_change, 2),
-                "open": open_p if open_p else "—", # 如果還是抓不到，回傳 —
+                "open": open_p if open_p else "—",
                 "high": high_p if high_p else "—",
                 "low": low_p if low_p else "—",
                 "time": time_str
@@ -238,37 +229,48 @@ def get_realtime_quote_fugle(code):
     except Exception as e: return None, str(e)
     return None, None
 
-# --- V23.0: 取得總經數據 (新增大盤/期貨容錯) ---
+# --- V23.0: 取得總經數據 (新增台指期備用方案) ---
 def get_macro_data():
     data = {}
-    # 優先抓取 (匯率與債券)
     tickers = {
         "USD/TWD": "TWD=X", 
         "10Y Yield": "^TNX", 
         "20Y Price (TLT)": "TLT",
         "30Y Yield": "^TYX",
-        "大盤指數": "^TWII" # 加權指數
+        "大盤指數": "^TWII"
     }
     for name, symbol in tickers.items():
         try:
-            t = yf.Ticker(symbol); hist = t.history(period="5d")
+            t = yf.Ticker(symbol)
+            hist = t.history(period="5d")
             if len(hist) >= 2:
                 now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; change = now - prev; data[name] = (now, change)
+                if name == "20Y Price (TLT)":
+                    try:
+                        yield_val = t.info.get('yield', 0)
+                        if not yield_val: yield_val = t.info.get('trailingAnnualDividendYield', 0)
+                        data['20Y Yield'] = yield_val * 100
+                    except: pass
         except: pass
     
-    # 嘗試抓期貨 (不強求，失敗就算了)
-    try:
-        t = yf.Ticker("FITX=F"); hist = t.history(period="5d") # 改代號試試
-        if len(hist) >= 2:
-            now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; data['台指期'] = (now, now - prev)
-    except: pass
-    
-    # 抓 IEF
+    # IEF
     try:
         t = yf.Ticker("IEF"); hist = t.history(period="5d")
         if not hist.empty:
             now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; data['10Y Price (IEF)'] = (now, now - prev)
     except: pass
+
+    # [V23.2] 台指期救援：先試 FITX=F, 失敗試 WTX=F, 再失敗試 ^TWII(替代)
+    futures_done = False
+    for f_sym in ["FITX=F", "WTX=F"]:
+        try:
+            t = yf.Ticker(f_sym); hist = t.history(period="5d")
+            if len(hist) >= 2:
+                now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; data['台指期'] = (now, now - prev)
+                futures_done = True
+                break
+        except: pass
+    if not futures_done: data['台指期'] = ("N/A", 0) # 真的抓不到就顯示 N/A
 
     return data
 
@@ -398,7 +400,7 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
-# --- Header: 即時報價 + V19.3 總經戰情 ---
+# --- Header: 即時報價 ---
 stock_name = st.session_state.watchlist.get(selected_code, selected_code)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
@@ -420,12 +422,47 @@ with st.expander("🔍 [開發者模式] 查看 API 原始回傳資料 (Raw JSON
 
 st.markdown("---")
 
-# V23.0: 戰情室 (分國內/國際兩排)
-st.markdown("### 🌎 全球戰情室 (更新按鈕在右側)")
+# V19.3: 總經戰情區
+st.markdown("### 🌎 國際總經戰情室 (更新按鈕在右側)")
 macro_data = get_macro_data()
+m1, m2, m3, m4, m5, m6 = st.columns([1, 1, 1, 1, 1, 0.5]) 
 
+with m1:
+    if "USD/TWD" in macro_data:
+        rate, change = macro_data["USD/TWD"]
+        color = "inverse" if change > 0 else "normal"
+        st.metric("🇺🇸 美元兌台幣", f"{rate:.2f}", f"{change:.2f}", delta_color=color)
+    else: st.metric("🇺🇸 美元兌台幣", "N/A", "N/A")
+with m2:
+    if "10Y Yield" in macro_data:
+        rate, change = macro_data["10Y Yield"]
+        color = "inverse" if change > 0 else "normal"
+        st.metric("🏦 美債10年殖利率", f"{rate:.2f}%", f"{change:.2f}", delta_color=color)
+    else: st.metric("🏦 美債10年殖利率", "N/A", "N/A")
+with m3:
+    if "10Y Price (IEF)" in macro_data:
+        price, change = macro_data["10Y Price (IEF)"]
+        color = "normal" if change > 0 else "inverse"
+        st.metric("📉 美債10年價格(IEF)", f"{price:.2f}", f"{change:.2f}", delta_color=color)
+    else: st.metric("📉 美債10年價格(IEF)", "N/A", "N/A")
+with m4:
+    if "20Y Price (TLT)" in macro_data:
+        price, change = macro_data["20Y Price (TLT)"]
+        color = "normal" if change > 0 else "inverse"
+        st.metric("📉 美債20年價格(TLT)", f"{price:.2f}", f"{change:.2f}", delta_color=color)
+    else: st.metric("📉 美債20年價格(TLT)", "N/A", "N/A")
+with m5:
+    if "30Y Yield" in macro_data:
+        val, chg = macro_data["30Y Yield"]
+        st.metric("💰 30年債殖利率", f"{val:.2f}%", f"{chg:.2f}", delta_color="inverse" if chg>0 else "normal")
+    else: st.metric("30年債殖利率", "N/A", "N/A")
+with m6:
+    st.write("")
+    if st.button("🔄 更新總經"): st.rerun()
+
+# V23.0: 台股戰情
 st.caption("🇹🇼 台股觀測")
-t1, t2, t3, t4 = st.columns([1, 1, 1, 0.5])
+t1, t2, t3 = st.columns(3)
 with t1:
     if "大盤指數" in macro_data:
         val, chg = macro_data["大盤指數"]
@@ -434,46 +471,13 @@ with t1:
 with t2:
     if "台指期" in macro_data:
         val, chg = macro_data["台指期"]
-        st.metric("台指期 (WTX)", f"{val:.2f}", f"{chg:.2f}", delta_color="normal" if chg>0 else "inverse")
+        if isinstance(val, float):
+            st.metric("台指期 (WTX)", f"{val:.2f}", f"{chg:.2f}", delta_color="normal" if chg>0 else "inverse")
+        else: st.metric("台指期", "暫無資料")
     else: st.metric("台指期", "N/A")
-with t3:
-    if "USD/TWD" in macro_data:
-        val, chg = macro_data["USD/TWD"]
-        st.metric("🇺🇸 美元兌台幣", f"{val:.2f}", f"{chg:.2f}", delta_color="inverse" if chg>0 else "normal")
-    else: st.metric("美元兌台幣", "N/A")
-with t4:
-    st.write("")
-    if st.button("🔄 更新總經"): st.rerun()
-
-st.caption("🇺🇸 美債與殖利率")
-m1, m2, m3, m4 = st.columns(4)
-with m1:
-    if "10Y Yield" in macro_data:
-        val, chg = macro_data["10Y Yield"]
-        st.metric("🏦 10年債殖利率", f"{val:.2f}%", f"{chg:.2f}", delta_color="inverse" if chg>0 else "normal")
-    else: st.metric("10年債殖利率", "N/A")
-with m2:
-    if "10Y Price (IEF)" in macro_data:
-        val, chg = macro_data["10Y Price (IEF)"]
-        st.metric("📉 10年債價格(IEF)", f"{val:.2f}", f"{chg:.2f}", delta_color="normal" if chg>0 else "inverse")
-    else: st.metric("10年債價格", "N/A")
-with m3:
-    if "20Y Price (TLT)" in macro_data:
-        val, chg = macro_data["20Y Price (TLT)"]
-        st.metric("📉 20年債價格(TLT)", f"{val:.2f}", f"{chg:.2f}", delta_color="normal" if chg>0 else "inverse")
-    else: st.metric("20年債價格", "N/A")
-with m4:
-    if "30Y Yield" in macro_data:
-        val, chg = macro_data["30Y Yield"]
-        st.metric("💰 30年債殖利率", f"{val:.2f}%", f"{chg:.2f}", delta_color="inverse" if chg>0 else "normal")
-    else: st.metric("30年債殖利率", "N/A")
 
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權", "🌊 資金流向儀表板"])
-
-# Tab 1-8 請從 V21.1 複製貼上 (為節省篇幅省略)
-# ... (請務必補上 V21.1 的完整 Tab 內容) ...
-# 以下僅放 Tab 1 作為佔位符，請確保所有功能都回來
 
 with tab1:
     if selected_code:
@@ -585,7 +589,7 @@ with tab2:
                     except: pass
             except Exception as e: pass
             progress_bar.progress((i+1)/total)
-        progress_bar.empty()
+        progress.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
