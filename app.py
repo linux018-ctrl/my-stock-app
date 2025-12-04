@@ -16,14 +16,14 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V23.4", layout="wide")
-st.title("📈 艾倫杭特 V23.4 - 報價完美修復版")
+st.set_page_config(page_title="艾倫杭特 V24.0", layout="wide")
+st.title("📈 艾倫杭特 V24.0 - 全方位數據修復版")
 
 # ==========================================
 # 🔑 API 金鑰設定區
 # ==========================================
 LINE_USER_ID = "U2e18c346fe075d2f62986166a4a6ef1c" 
-LINE_CHANNEL_TOKEN = "DNsc+VqdlEliUHVd92ozW59gLdEDJULKIslQOqlTsP6qs5AY3Ydaj8X8l1iShfRHFzWpL++lbb5e4GiDHrioF6JdwmsiA/OHjaB4ZZYGG1TqwUth6hfcbHrHgVscPSZmVGIx4n/ZXYAZhPrvGCKqiwdB04t89/1O/w1cDnyilFU="
+LINE_CHANNEL_TOKEN = "NTBjOGQ4ODgtYjFlMi00MzdjLThiNTQtZGI1NGFkODlkZTMyIDg1NWRhZjhlLWY5YTQtNGU3OC1iOGJmLWRhNDQwNGU1MmZjNA=="
 FUGLE_API_KEY = "NTBjOGQ4ODgtYjFlMi00MzdjLThiNTQtZGI1NGFkODlkZTMyIDg1NWRhZjhlLWY5YTQtNGU3OC1iOGJmLWRhNDQwNGU1MmZjNA==" 
 
 # --- 建立 Fugle Client ---
@@ -190,7 +190,7 @@ def safe_float(val):
     try: return float(val)
     except: return None
 
-# --- V23.4: Fugle 報價 (V23.4 終極修正版) ---
+# --- V24.0 修正：Fugle 即時報價 (欄位對應修正) ---
 def get_realtime_quote_fugle(code):
     if not fugle_client: return None, None
     try:
@@ -198,21 +198,19 @@ def get_realtime_quote_fugle(code):
         quote = stock.intraday.quote(symbol=code)
         raw_json = quote
         if quote:
-            # 價格: 優先取 lastTrade, 其次 trade
             price = safe_float(quote.get('lastTrade', {}).get('price'))
             if price is None: price = safe_float(quote.get('trade', {}).get('price'))
-            
-            # 漲跌
             change = safe_float(quote.get('change'))
             pct_change = 0
             if price is not None and change is not None:
                 prev_close = price - change
                 if prev_close > 0: pct_change = (change / prev_close) * 100
             
-            # [V23.4 修正]: 優先檢查 openPrice/highPrice/lowPrice (根據Raw JSON截圖)
-            open_p = safe_float(quote.get('openPrice')) or safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open')) or safe_float(quote.get('total', {}).get('open'))
-            high_p = safe_float(quote.get('highPrice')) or safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high')) or safe_float(quote.get('total', {}).get('high'))
-            low_p = safe_float(quote.get('lowPrice')) or safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low')) or safe_float(quote.get('total', {}).get('low'))
+            # [V24.0] 根據截圖，Fugle 回傳的是 openPrice, highPrice, lowPrice
+            # 我們依序嘗試各種可能的 key
+            open_p = safe_float(quote.get('openPrice')) or safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open'))
+            high_p = safe_float(quote.get('highPrice')) or safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high'))
+            low_p = safe_float(quote.get('lowPrice')) or safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low'))
             
             time_str = quote.get('lastUpdated')
             try:
@@ -250,8 +248,7 @@ def get_macro_data():
         if not hist.empty:
             now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; data['10Y Price (IEF)'] = (now, now - prev)
     except: pass
-
-    # 台指期救援
+    
     futures_done = False
     for f_sym in ["FITX=F", "WTX=F"]:
         try:
@@ -268,7 +265,6 @@ def get_stock_data(symbol, bars=200, interval="1d"):
     ticker = f"{symbol}.TW"; stock = yf.Ticker(ticker)
     if interval == "1d": period_str = f"{bars + 200}d"
     elif interval == "1wk": period_str = "5y"
-    elif interval == "5m": period_str = "5d"
     else: period_str = "max"
     df = stock.history(period=period_str, interval=interval) 
     if df.empty: ticker = f"{symbol}.TWO"; stock = yf.Ticker(ticker); df = stock.history(period=period_str, interval=interval)
@@ -292,12 +288,42 @@ def calculate_indicators(df):
     except: pass
     return df
 
+# --- V24.0: 基本面資料救援 (含手動計算) ---
 def get_fundamentals(stock_obj):
     try:
         info = stock_obj.info
-        pe_raw = info.get('trailingPE'); pe_ratio = round(pe_raw, 2) if pe_raw else None
-        div_yield = info.get('dividendYield', 0); div_yield_str = f"{round(div_yield*100, 2)}%" if div_yield and div_yield < 1 else f"{round(div_yield, 2)}%" if div_yield else "N/A"
-        rev_growth = info.get('revenueGrowth', 0); yoy_str = f"{round(rev_growth * 100, 2)}%" if rev_growth else "N/A"; yoy_c = "normal" if isinstance(rev_growth, float) and rev_growth > 0 else "inverse"
+        
+        # 1. 本益比 (PE)
+        pe_raw = info.get('trailingPE')
+        if pe_raw is None:
+            # 嘗試手動計算：Price / EPS
+            try:
+                price = info.get('currentPrice') or info.get('previousClose')
+                eps = info.get('trailingEps')
+                if price and eps and eps > 0:
+                    pe_raw = price / eps
+            except: pass
+        pe_ratio = round(pe_raw, 2) if pe_raw else None
+
+        # 2. 殖利率 (Yield)
+        div_yield = info.get('dividendYield')
+        if div_yield is None:
+            try:
+                # 嘗試手動計算：Dividend / Price
+                price = info.get('currentPrice') or info.get('previousClose')
+                div_rate = info.get('dividendRate')
+                if price and div_rate:
+                    div_yield = div_rate / price
+            except: pass
+        
+        div_yield_str = f"{round(div_yield*100, 2)}%" if div_yield else "N/A"
+
+        # 3. 營收成長 (Revenue Growth)
+        rev_growth = info.get('revenueGrowth', 0)
+        yoy_str = f"{round(rev_growth * 100, 2)}%" if rev_growth else "N/A"
+        yoy_c = "normal" if isinstance(rev_growth, float) and rev_growth > 0 else "inverse"
+        
+        # 4. QoQ
         try:
             financials = stock_obj.quarterly_financials
             if 'Total Revenue' in financials.index:
@@ -305,6 +331,7 @@ def get_fundamentals(stock_obj):
                 qoq_str = f"{round(qoq_val * 100, 2)}%"; qoq_c = "normal" if qoq_val > 0 else "inverse"
             else: qoq_str = "N/A"; qoq_c = "off"
         except: qoq_str = "N/A"; qoq_c = "off"
+        
         return pe_ratio, div_yield_str, yoy_str, qoq_str, yoy_c, qoq_c
     except: return None, "N/A", "N/A", "N/A", "off", "off"
 
@@ -396,7 +423,6 @@ c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
 with c_head2:
     if st.button("🔄 立即更新報價"): st.rerun()
-
 rt_data, raw_json = get_realtime_quote_fugle(selected_code)
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
@@ -415,9 +441,44 @@ st.markdown("---")
 # V19.3: 總經戰情區
 st.markdown("### 🌎 國際總經戰情室 (更新按鈕在右側)")
 macro_data = get_macro_data()
+m1, m2, m3, m4, m5, m6 = st.columns([1, 1, 1, 1, 1, 0.5]) 
 
+with m1:
+    if "USD/TWD" in macro_data:
+        rate, change = macro_data["USD/TWD"]
+        color = "inverse" if change > 0 else "normal"
+        st.metric("🇺🇸 美元兌台幣", f"{rate:.2f}", f"{change:.2f}", delta_color=color)
+    else: st.metric("🇺🇸 美元兌台幣", "N/A", "N/A")
+with m2:
+    if "10Y Yield" in macro_data:
+        rate, change = macro_data["10Y Yield"]
+        color = "inverse" if change > 0 else "normal"
+        st.metric("🏦 美債10年殖利率", f"{rate:.2f}%", f"{change:.2f}", delta_color=color)
+    else: st.metric("🏦 美債10年殖利率", "N/A", "N/A")
+with m3:
+    if "10Y Price (IEF)" in macro_data:
+        price, change = macro_data["10Y Price (IEF)"]
+        color = "normal" if change > 0 else "inverse"
+        st.metric("📉 美債10年價格(IEF)", f"{price:.2f}", f"{change:.2f}", delta_color=color)
+    else: st.metric("📉 美債10年價格(IEF)", "N/A", "N/A")
+with m4:
+    if "20Y Price (TLT)" in macro_data:
+        price, change = macro_data["20Y Price (TLT)"]
+        color = "normal" if change > 0 else "inverse"
+        st.metric("📉 美債20年價格(TLT)", f"{price:.2f}", f"{change:.2f}", delta_color=color)
+    else: st.metric("📉 美債20年價格(TLT)", "N/A", "N/A")
+with m5:
+    if "30Y Yield" in macro_data:
+        val, chg = macro_data["30Y Yield"]
+        st.metric("💰 30年債殖利率", f"{val:.2f}%", f"{chg:.2f}", delta_color="inverse" if chg>0 else "normal")
+    else: st.metric("30年債殖利率", "N/A", "N/A")
+with m6:
+    st.write("")
+    if st.button("🔄 更新總經"): st.rerun()
+
+# V23.0: 台股戰情
 st.caption("🇹🇼 台股觀測")
-t1, t2, t3, t4 = st.columns([1, 1, 1, 0.5])
+t1, t2, t3 = st.columns(3)
 with t1:
     if "大盤指數" in macro_data:
         val, chg = macro_data["大盤指數"]
@@ -426,40 +487,10 @@ with t1:
 with t2:
     if "台指期" in macro_data:
         val, chg = macro_data["台指期"]
-        if isinstance(val, float): st.metric("台指期 (WTX)", f"{val:.2f}", f"{chg:.2f}", delta_color="normal" if chg>0 else "inverse")
+        if isinstance(val, float):
+            st.metric("台指期 (WTX)", f"{val:.2f}", f"{chg:.2f}", delta_color="normal" if chg>0 else "inverse")
         else: st.metric("台指期", "暫無資料")
     else: st.metric("台指期", "N/A")
-with t3:
-    if "USD/TWD" in macro_data:
-        val, chg = macro_data["USD/TWD"]
-        st.metric("🇺🇸 美元兌台幣", f"{val:.2f}", f"{chg:.2f}", delta_color="inverse" if chg>0 else "normal")
-    else: st.metric("美元兌台幣", "N/A")
-with t4:
-    st.write("")
-    if st.button("🔄 更新總經"): st.rerun()
-
-st.caption("🇺🇸 美債與殖利率")
-m1, m2, m3, m4 = st.columns(4)
-with m1:
-    if "10Y Yield" in macro_data:
-        val, chg = macro_data["10Y Yield"]
-        st.metric("🏦 10年債殖利率", f"{val:.2f}%", f"{chg:.2f}", delta_color="inverse" if chg>0 else "normal")
-    else: st.metric("10年債殖利率", "N/A")
-with m2:
-    if "10Y Price (IEF)" in macro_data:
-        val, chg = macro_data["10Y Price (IEF)"]
-        st.metric("📉 10年債價格(IEF)", f"{val:.2f}", f"{chg:.2f}", delta_color="normal" if chg>0 else "inverse")
-    else: st.metric("10年債價格", "N/A")
-with m3:
-    if "20Y Price (TLT)" in macro_data:
-        val, chg = macro_data["20Y Price (TLT)"]
-        st.metric("📉 20年債價格(TLT)", f"{val:.2f}", f"{chg:.2f}", delta_color="normal" if chg>0 else "inverse")
-    else: st.metric("20年債價格", "N/A")
-with m4:
-    if "30Y Yield" in macro_data:
-        val, chg = macro_data["30Y Yield"]
-        st.metric("💰 30年債殖利率", f"{val:.2f}%", f"{chg:.2f}", delta_color="inverse" if chg>0 else "normal")
-    else: st.metric("30年債殖利率", "N/A")
 
 # --- 介面分頁 ---
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📊 個股儀表板", "🤖 觀察名單掃描", "🔥 Goodinfo轉折", "💎 三率三升", "🧪 策略回測", "🔮 AI 趨勢預測", "🕵️‍♂️ 籌碼與股權", "🌊 資金流向儀表板"])
@@ -541,7 +572,7 @@ with tab2:
     st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
     if st.button("🚀 掃描觀察名單"):
         scan_results = []
-        progress_bar = st.progress(0) # V21.0: 改名為 progress_bar
+        progress_bar = st.progress(0) # V24.0 修正: 統一變數名稱
         stocks_list = list(st.session_state.watchlist.items())
         total = len(stocks_list)
         for i, (code, name) in enumerate(stocks_list):
@@ -574,8 +605,11 @@ with tab2:
                     except: pass
             except Exception as e: pass
             progress_bar.progress((i+1)/total)
+        
+        # V24.0 修正: 縮排正確，確保 progress_bar 存在
         progress_bar.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
+    
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
@@ -600,7 +634,7 @@ with tab3:
         if target_sector == "你的觀察名單": scan_list = list(st.session_state.watchlist.keys())
         else: scan_list = SECTOR_DICT[target_sector]
         reversal_stocks = []
-        progress_bar = st.progress(0)
+        progress_bar = st.progress(0) # V24.0 修正
         total_scan = len(scan_list)
         for i, code in enumerate(scan_list):
             time.sleep(0.5)
@@ -634,8 +668,11 @@ with tab3:
                     except: pass
             except: pass
             progress_bar.progress((i+1)/total_scan)
+        
+        # V24.0 修正
         progress_bar.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
+
     if st.session_state.scan_result_tab3 is not None and not st.session_state.scan_result_tab3.empty:
         rev_df = st.session_state.scan_result_tab3
         st.success(f"發現 {len(rev_df)} 檔潛在轉折股！")
@@ -660,7 +697,7 @@ with tab4:
         if target_sector_f == "你的觀察名單": scan_list_f = list(st.session_state.watchlist.keys())
         else: scan_list_f = SECTOR_DICT[target_sector_f]
         fund_results = []
-        progress_bar = st.progress(0)
+        progress_bar = st.progress(0) # V24.0 修正
         status = st.empty()
         total_scan = len(scan_list_f)
         for i, code in enumerate(scan_list_f):
@@ -678,8 +715,11 @@ with tab4:
                     fund_results.append(item)
             except: pass
             progress_bar.progress((i+1)/total_scan)
+        
+        # V24.0 修正
         progress_bar.empty()
         st.session_state.scan_result_tab4 = pd.DataFrame(fund_results)
+    
     if st.session_state.scan_result_tab4 is not None and not st.session_state.scan_result_tab4.empty:
         fund_df = st.session_state.scan_result_tab4
         st.balloons()
@@ -869,13 +909,12 @@ with tab7:
     c_link2.link_button(f"🐳 主力動向 (Goodinfo)", f"https://goodinfo.tw/tw/ShowK_Chart.asp?STOCK_ID={selected_code}&CHT_CAT2=DATE", icon="🌊")
     c_link3.link_button("🏛️ 集保結算所 (官方)", "https://www.tdcc.com.tw/portal/zh/smWeb/qryStock", icon="🇹🇼")
 
-# V21.1 分頁 8: 資金流向 (變數名稱與縮排修復)
 with tab8:
     st.subheader("🌊 資金流向儀表板 - 誰在吸金？")
     st.info("分析各族群今日的【平均漲跌幅】與【預估成交金額】，找出資金流入的強勢板塊。")
     if st.button("🚀 啟動資金流向分析"):
         sector_data = []
-        progress_bar = st.progress(0) # 統一名稱
+        progress_bar = st.progress(0) # V21.0: 改名為 progress_bar
         total_sectors = len(SECTOR_DICT)
         for i, (sector_name, codes) in enumerate(SECTOR_DICT.items()):
             tickers_str = " ".join([f"{c}.TW" for c in codes])
@@ -906,9 +945,7 @@ with tab8:
                     sector_data.append({"族群": sector_name, "平均漲跌幅(%)": avg_change, "預估成交金額(億)": sector_value / 100000000, "領頭羊": f"{leader_name} (+{round(top_gainer['change'], 2)}%)"})
             except: pass
             progress_bar.progress((i + 1) / total_sectors)
-        
-        progress_bar.empty() # 縮排修正，確保在 if 內
-        
+        progress_bar.empty()
         if sector_data:
             df_sector = pd.DataFrame(sector_data).sort_values(by="平均漲跌幅(%)", ascending=False)
             st.session_state.scan_result_tab8 = df_sector
