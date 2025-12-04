@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V26.1", layout="wide")
-st.title("📈 艾倫杭特 V26.1 - 智能數值校正版")
+st.set_page_config(page_title="艾倫杭特 V27.0", layout="wide")
+st.title("📈 艾倫杭特 V27.0 - 客製化觀察清單版")
 
 # ==========================================
 # 🔐 讀取金鑰保險箱 (Secrets)
@@ -46,11 +46,32 @@ def send_line_message(message_text):
 
 # --- 資料存取 ---
 WATCHLIST_FILE = 'watchlist.json'
+
+# V27.0: 用戶客製化預設清單
 DEFAULT_WATCHLIST = {
-    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2364": "倫飛",
-    "3005": "神基", "2382": "廣達", "3231": "緯創", "2603": "長榮",
-    "3004": "豐達科", "2850": "新產"
+    "1609": "大亞",
+    "2330": "台積電",
+    "2337": "旺宏",
+    "2344": "華邦電",
+    "2364": "倫飛",
+    "2374": "佳能",
+    "2471": "資通",
+    "3029": "零壹",
+    "2834": "台企銀",
+    "2883": "凱基金",
+    "2881": "富邦金",
+    "2890": "永豐金",
+    "3004": "豐達科",
+    "3005": "神基",
+    "3706": "神達",
+    "3022": "威強電",
+    "3213": "茂訊",
+    "3645": "達邁",
+    "4906": "正文",
+    "5392": "能率",
+    "6227": "茂綸"
 }
+
 def load_watchlist():
     if os.path.exists(WATCHLIST_FILE):
         try:
@@ -94,7 +115,11 @@ STOCK_NAMES = {
     "1760":"中天", "2886":"兆豐金", "2891":"中信金", "2892":"第一金", "2884":"玉山金", 
     "2880":"華南金", "2357":"華碩", "2301":"光寶科", "2850":"新產", "2451":"創見",
     "0050":"元大台灣50", "0056":"元大高股息", "00878":"國泰永續高股息", 
-    "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50"
+    "00929":"復華台灣科技優息", "00919":"群益台灣精選高息", "006208":"富邦台50",
+    # 補上 V27.0 新增的個股名稱，以備不時之需
+    "1609": "大亞", "2337": "旺宏", "2364": "倫飛", "2374": "佳能", "2471": "資通", 
+    "3029": "零壹", "2834": "台企銀", "2883": "凱基金", "2890": "永豐金", "3706": "神達", 
+    "3022": "威強電", "3213": "茂訊", "3645": "達邁", "5392": "能率", "6227": "茂綸"
 }
 
 # --- State ---
@@ -105,8 +130,11 @@ if 'scan_result_tab4' not in st.session_state: st.session_state.scan_result_tab4
 if 'scan_result_tab8' not in st.session_state: st.session_state.scan_result_tab8 = None
 if 'ai_data' not in st.session_state: st.session_state.ai_data = None
 if 'sb_selected_code' not in st.session_state:
-    if st.session_state.watchlist: st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
-    else: st.session_state.sb_selected_code = "2330"
+    # 預設選第一檔，若清單為空則預設台積電
+    if st.session_state.watchlist: 
+        st.session_state.sb_selected_code = list(st.session_state.watchlist.keys())[0]
+    else: 
+        st.session_state.sb_selected_code = "2330"
 
 if 'pending_update' in st.session_state and st.session_state.pending_update:
     update_data = st.session_state.pending_update
@@ -117,7 +145,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (略) ---
+# --- SECTOR_DICT ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -258,6 +286,7 @@ def get_macro_data():
         if not hist.empty:
             now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; data['10Y Price (IEF)'] = (now, now - prev)
     except: pass
+    
     futures_done = False
     for f_sym in ["FITX=F", "WTX=F"]:
         try:
@@ -330,13 +359,11 @@ def get_fundamentals(stock_obj, current_price=None):
 
         # 2. 殖利率 (V26.1 修正)
         div_yield_str = "N/A"
-        # 優先用 Annual Payout (dividendRate) 來算，比 sum(history) 穩
         div_rate = info.get('dividendRate')
         if div_rate and calc_price:
              y_val = (div_rate / calc_price) * 100
              div_yield_str = f"{round(y_val, 2)}% (估)"
         elif calc_price and not divs.empty:
-            # 備用：加總歷史
             one_year = pd.Timestamp.now() - pd.Timedelta(days=365)
             divs.index = divs.index.tz_localize(None)
             recent_divs = divs[divs.index >= one_year]
@@ -344,18 +371,14 @@ def get_fundamentals(stock_obj, current_price=None):
             debug_info['cal_div_sum'] = total_div
             if total_div > 0:
                 y_val = (total_div / calc_price) * 100
-                # V26.1 智能校正: 如果算出來大於 30%，可能單位錯或配股，除以100試試? 
-                # 這裡先不做危險的除法，而是標註
                 div_yield_str = f"{round(y_val, 2)}% (實算)"
                 debug_info['cal_yield'] = y_val
-        # 最後備用 info (檢查單位)
         if div_yield_str == "N/A":
             d_yield = info.get('dividendYield')
             debug_info['info_yield'] = d_yield
             if d_yield:
-                # Yahoo 有時候給 0.03, 有時候給 3
-                if d_yield > 0.5: val = d_yield # 已經是 %
-                else: val = d_yield * 100 # 是小數
+                if d_yield > 0.5: val = d_yield
+                else: val = d_yield * 100
                 div_yield_str = f"{round(val, 2)}%"
 
         # 3. 營收
@@ -477,6 +500,7 @@ c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
 with c_head2:
     if st.button("🔄 立即更新報價"): st.rerun()
+
 rt_data, raw_json = get_realtime_quote_fugle(selected_code)
 if rt_data:
     r1, r2, r3, r4 = st.columns(4)
@@ -638,15 +662,12 @@ with tab1:
                 else: st.info("暫無相關新聞")
             except: st.warning("新聞載入失敗。")
 
-# Tab 2-8 (保持 V23.3 內容)
-# ... (請務必複製貼上 V23.3/V24.3 的 Tab 2-8 程式碼) ...
-# (為節省篇幅，這裡省略，但您必須完整貼上才能運作)
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
     st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
     if st.button("🚀 掃描觀察名單"):
         scan_results = []
-        progress_bar = st.progress(0) # V24.0: 修正變數
+        progress_bar = st.progress(0)
         stocks_list = list(st.session_state.watchlist.items())
         total = len(stocks_list)
         for i, (code, name) in enumerate(stocks_list):
@@ -679,11 +700,8 @@ with tab2:
                     except: pass
             except Exception as e: pass
             progress_bar.progress((i+1)/total)
-        
-        # V24.0: 修正縮排
         progress_bar.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
-    
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
@@ -741,7 +759,7 @@ with tab3:
                             reversal_stocks.append(item)
                     except: pass
             except: pass
-            progress_bar.progress((i+1)/total_scan)
+            progress.progress((i+1)/total_scan)
         progress_bar.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
     if st.session_state.scan_result_tab3 is not None and not st.session_state.scan_result_tab3.empty:
@@ -785,7 +803,7 @@ with tab4:
                     }
                     fund_results.append(item)
             except: pass
-            progress_bar.progress((i+1)/total_scan)
+            progress.progress((i+1)/total_scan)
         progress_bar.empty()
         st.session_state.scan_result_tab4 = pd.DataFrame(fund_results)
     if st.session_state.scan_result_tab4 is not None and not st.session_state.scan_result_tab4.empty:
