@@ -13,32 +13,41 @@ import os
 import feedparser
 import time
 from fugle_marketdata import RestClient
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V25.0", layout="wide")
-st.title("📈 艾倫杭特 V25.0 - 智能託管與強力運算版")
+st.set_page_config(page_title="艾倫杭特 V24.3", layout="wide")
+st.title("📈 艾倫杭特 V24.3 - 智能金鑰與強力運算版")
 
 # ==========================================
-# 🔐 讀取金鑰保險箱 (Secrets)
+# 🔐 讀取金鑰保險箱 (Secrets) - V25.0 提早實裝
 # ==========================================
-# 嘗試從 st.secrets 讀取，若無則使用預設空字串避免報錯
+# 優先從 Streamlit Secrets 讀取，若無則留空 (避免報錯，方便本地測試)
 try:
+    FUGLE_API_KEY = st.secrets["stock"]["fugle_api_key"]
     LINE_USER_ID = st.secrets["stock"]["line_user_id"]
     LINE_CHANNEL_TOKEN = st.secrets["stock"]["line_channel_token"]
-    FUGLE_API_KEY = st.secrets["stock"]["fugle_api_key"]
-except Exception as e:
-    st.error("⚠️ 請先在 Streamlit Cloud 的 Secrets 設定中填入 API Key！")
-    st.stop() # 停止執行，強迫設定
+except:
+    # 如果沒設定 Secrets，可以在這裡暫時填寫，或保持為 None
+    FUGLE_API_KEY = None 
+    LINE_USER_ID = None
+    LINE_CHANNEL_TOKEN = None
+    st.toast("⚠️ 未偵測到 Secrets 設定，部分功能可能受限。", icon="ℹ️")
 
 # --- 建立 Fugle Client ---
 try:
-    fugle_client = RestClient(api_key=FUGLE_API_KEY)
+    if FUGLE_API_KEY:
+        fugle_client = RestClient(api_key=FUGLE_API_KEY)
+    else:
+        fugle_client = None
 except:
     fugle_client = None
 
 # --- LINE 發送函數 ---
 def send_line_message(message_text):
+    if not LINE_CHANNEL_TOKEN or not LINE_USER_ID:
+        st.error("尚未設定 LINE Token，無法發送。")
+        return
     url = "https://api.line.me/v2/bot/message/push"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {LINE_CHANNEL_TOKEN}"}
     payload = {"to": LINE_USER_ID, "messages": [{"type": "text", "text": message_text}]}
@@ -118,7 +127,7 @@ if 'pending_update' in st.session_state and st.session_state.pending_update:
     st.toast(f"✅ 已鎖定：{new_name} ({new_code})", icon="🎉")
     st.session_state.pending_update = None
 
-# --- SECTOR_DICT (略) ---
+# --- SECTOR_DICT ---
 SECTOR_DICT = {
     "[熱門] 國民ETF": ["0050", "0056", "00878", "00929", "00919", "006208", "00713"],
     "[概念] AI 伺服器/PC": ["2382", "3231", "2356", "6669", "2376", "3017", "2421", "2357", "2301"],
@@ -195,6 +204,7 @@ def safe_float(val):
     try: return float(val)
     except: return None
 
+# --- V24.3: Fugle 報價 (修復欄位對應 + V23.4 強力備援) ---
 def get_realtime_quote_fugle(code):
     if not fugle_client: return None, None
     try:
@@ -209,14 +219,36 @@ def get_realtime_quote_fugle(code):
             if price is not None and change is not None:
                 prev_close = price - change
                 if prev_close > 0: pct_change = (change / prev_close) * 100
-            open_p = safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open')) or safe_float(quote.get('total', {}).get('open'))
-            high_p = safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high')) or safe_float(quote.get('total', {}).get('high'))
-            low_p = safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low')) or safe_float(quote.get('total', {}).get('low'))
+            
+            # V24.3 重點修復：依序檢查 Fugle 常見的開高低欄位
+            open_p = (safe_float(quote.get('openPrice')) or 
+                      safe_float(quote.get('priceOpen', {}).get('price')) or 
+                      safe_float(quote.get('open')) or 
+                      safe_float(quote.get('total', {}).get('open')))
+            
+            high_p = (safe_float(quote.get('highPrice')) or 
+                      safe_float(quote.get('priceHigh', {}).get('price')) or 
+                      safe_float(quote.get('high')) or 
+                      safe_float(quote.get('total', {}).get('high')))
+            
+            low_p = (safe_float(quote.get('lowPrice')) or 
+                     safe_float(quote.get('priceLow', {}).get('price')) or 
+                     safe_float(quote.get('low')) or 
+                     safe_float(quote.get('total', {}).get('low')))
+            
             time_str = quote.get('lastUpdated')
             try:
                 dt_object = datetime.fromtimestamp(time_str / 1000000)
                 time_str = dt_object.strftime("%H:%M:%S")
             except: pass
+            
+            # 如果還是抓不到，回傳 Yahoo 備援 (雖然有延遲，但比 — 好)
+            if open_p is None:
+                try:
+                    y_t = yf.Ticker(f"{code}.TW"); y_h = y_t.history(period="1d")
+                    if not y_h.empty: open_p = y_h['Open'].iloc[-1]
+                except: pass
+            
             return {
                 "price": price, "change": change, "changePercent": round(pct_change, 2),
                 "open": open_p if open_p else "—",
@@ -257,7 +289,6 @@ def get_macro_data():
                 now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; data['台指期'] = (now, now - prev); futures_done = True; break
         except: pass
     if not futures_done: data['台指期'] = ("N/A", 0)
-
     return data
 
 # --- 核心功能區 ---
@@ -288,63 +319,59 @@ def calculate_indicators(df):
     except: pass
     return df
 
-# --- V25.0: 強力基本面計算 (Raw Data Calculation) ---
+# --- V24.3: 終極基本面計算 (Hard Calculation) ---
 def get_fundamentals(stock_obj, current_price=None):
     try:
-        # 1. 決定價格
-        info = stock_obj.info
+        # 1. 決定計算用股價 (Fugle 即時價優先)
         calc_price = current_price
         if not calc_price:
-            calc_price = info.get('currentPrice') or info.get('previousClose')
+            hist = stock_obj.history(period="1d")
+            if not hist.empty: calc_price = hist['Close'].iloc[-1]
         
-        # 2. 殖利率 (Yield) - 暴力法：抓過去1年配息總和 / 股價
+        # 2. 本益比 (PE) - 暴力算: 股價 / 近4季EPS總和
+        pe_show = "N/A"
+        try:
+            # 嘗試從財報抓 EPS (Yahoo 的 quarterly_financials 結構較亂，用 info 做第一層)
+            eps_ttm = stock_obj.info.get('trailingEps')
+            # 如果 info 沒給，嘗試從財報算 (太複雜易錯，先用 info 備援)
+            if eps_ttm and calc_price:
+                pe_val = calc_price / eps_ttm
+                pe_show = f"{round(pe_val, 2)} (估)"
+            elif stock_obj.info.get('trailingPE'):
+                pe_show = round(stock_obj.info.get('trailingPE'), 2)
+        except: pass
+
+        # 3. 殖利率 (Yield) - 暴力算: 近一年配息總和 / 股價
         div_yield_str = "N/A"
         try:
             divs = stock_obj.dividends
             if not divs.empty:
-                # 篩選最近 365 天的配息
-                one_year_ago = pd.Timestamp.now() - pd.Timedelta(days=365)
-                recent_divs = divs[divs.index >= one_year_ago.tz_localize(divs.index.tz)]
+                # 抓最近 365 天
+                one_year = pd.Timestamp.now() - pd.Timedelta(days=365)
+                # 修正時區問題：移除時區後再比較
+                divs.index = divs.index.tz_localize(None)
+                recent_divs = divs[divs.index >= one_year]
                 total_div = recent_divs.sum()
+                
                 if total_div > 0 and calc_price:
-                    yield_val = total_div / calc_price
-                    div_yield_str = f"{round(yield_val*100, 2)}% (實算)"
-        except: pass
+                    y_val = (total_div / calc_price) * 100
+                    div_yield_str = f"{round(y_val, 2)}% (實算)"
+        except: 
+            # 備用 info
+            d = stock_obj.info.get('dividendYield')
+            if d: div_yield_str = f"{round(d*100, 2)}%"
 
-        # 3. 本益比 (PE) - 優先用 info, 失敗則顯示 N/A (EPS資料太難抓準)
-        pe_show = "N/A"
-        pe_raw = info.get('trailingPE')
-        if pe_raw: pe_show = round(pe_raw, 2)
-
-        # 4. 營收 YoY/QoQ - 暴力法：抓季報表計算
+        # 4. 營收 (Yahoo 缺資料時顯示 N/A，避免當機)
         yoy_str = "N/A"; yoy_c = "off"
         qoq_str = "N/A"; qoq_c = "off"
-        
         try:
-            # 嘗試抓取季度財務報表
-            q_fin = stock_obj.quarterly_financials
-            if not q_fin.empty and 'Total Revenue' in q_fin.index:
-                # 確保按日期排序 (最新的在最前)
-                q_fin = q_fin.sort_index(axis=1, ascending=False)
-                revs = q_fin.loc['Total Revenue']
-                
-                if len(revs) >= 2:
-                    # QoQ: 本季 vs 上季
-                    q0 = revs.iloc[0]; q1 = revs.iloc[1]
-                    qoq = (q0 - q1) / q1
-                    qoq_str = f"{round(qoq*100, 2)}%"
-                    qoq_c = "normal" if qoq > 0 else "inverse"
-                
-                if len(revs) >= 5:
-                    # YoY: 本季 vs 去年同季 (index 4)
-                    q4 = revs.iloc[4]
-                    yoy = (q0 - q4) / q4
-                    yoy_str = f"{round(yoy*100, 2)}%"
-                    yoy_c = "normal" if yoy > 0 else "inverse"
+            rev_g = stock_obj.info.get('revenueGrowth')
+            if rev_g: 
+                yoy_str = f"{round(rev_g*100, 2)}%"
+                yoy_c = "normal" if rev_g > 0 else "inverse"
         except: pass
 
         return pe_show, div_yield_str, yoy_str, qoq_str, yoy_c, qoq_c
-        
     except: return "N/A", "N/A", "N/A", "N/A", "off", "off"
 
 def calculate_valuation_matrix(stock_obj, current_price):
@@ -516,7 +543,7 @@ with tab1:
             else: df_view.index = df_view.index.strftime('%Y-%m-%d')
             latest = df.iloc[-1]
             
-            # V25.0: 使用混合運算抓取基本面 (需傳入即時股價)
+            # V24.3: 傳入 Fugle 價格進行混合運算
             current_fugle_price = rt_data.get('price') if rt_data else None
             pe, div, yoy, qoq, yoy_c, qoq_c = get_fundamentals(ticker_obj, current_fugle_price)
             
@@ -582,6 +609,10 @@ with tab1:
                 else: st.info("暫無相關新聞")
             except: st.warning("新聞載入失敗。")
 
+# Tab 2-8 (保持 V23.3 內容，請務必複製貼上！)
+# 以下省略，請從 V23.3 複製
+# ... (請將 V23.3 的 Tab 2~8 完整程式碼貼過來) ...
+# 為了讓程式可執行，以下重複 Tab 2-8 的內容
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
     st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
@@ -920,7 +951,7 @@ with tab8:
     st.info("分析各族群今日的【平均漲跌幅】與【預估成交金額】，找出資金流入的強勢板塊。")
     if st.button("🚀 啟動資金流向分析"):
         sector_data = []
-        progress_bar = st.progress(0) # V21.0: 改名為 progress_bar
+        progress_bar = st.progress(0)
         total_sectors = len(SECTOR_DICT)
         for i, (sector_name, codes) in enumerate(SECTOR_DICT.items()):
             tickers_str = " ".join([f"{c}.TW" for c in codes])
