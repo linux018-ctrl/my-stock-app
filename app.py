@@ -13,18 +13,23 @@ import os
 import feedparser
 import time
 from fugle_marketdata import RestClient
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V24.2", layout="wide")
-st.title("📈 艾倫杭特 V24.2 - 基本面混合運算版")
+st.set_page_config(page_title="艾倫杭特 V25.0", layout="wide")
+st.title("📈 艾倫杭特 V25.0 - 智能託管與強力運算版")
 
 # ==========================================
-# 🔑 API 金鑰設定區
+# 🔐 讀取金鑰保險箱 (Secrets)
 # ==========================================
-LINE_USER_ID = "U2e18c346fe075d2f62986166a4a6ef1c" 
-LINE_CHANNEL_TOKEN = "DNsc+VqdlEliUHVd92ozW59gLdEDJULKIslQOqlTsP6qs5AY3Ydaj8X8l1iShfRHFzWpL++lbb5e4GiDHrioF6JdwmsiA/OHjaB4ZZYGG1TqwUth6hfcbHrHgVscPSZmVGIx4n/ZXYAZhPrvGCKqiwdB04t89/1O/w1cDnyilFU="
-FUGLE_API_KEY = "NTBjOGQ4ODgtYjFlMi00MzdjLThiNTQtZGI1NGFkODlkZTMyIDg1NWRhZjhlLWY5YTQtNGU3OC1iOGJmLWRhNDQwNGU1MmZjNA==" 
+# 嘗試從 st.secrets 讀取，若無則使用預設空字串避免報錯
+try:
+    LINE_USER_ID = st.secrets["stock"]["line_user_id"]
+    LINE_CHANNEL_TOKEN = st.secrets["stock"]["line_channel_token"]
+    FUGLE_API_KEY = st.secrets["stock"]["fugle_api_key"]
+except Exception as e:
+    st.error("⚠️ 請先在 Streamlit Cloud 的 Secrets 設定中填入 API Key！")
+    st.stop() # 停止執行，強迫設定
 
 # --- 建立 Fugle Client ---
 try:
@@ -204,12 +209,9 @@ def get_realtime_quote_fugle(code):
             if price is not None and change is not None:
                 prev_close = price - change
                 if prev_close > 0: pct_change = (change / prev_close) * 100
-            
-            # V23.4: Fugle 報價修正
-            open_p = safe_float(quote.get('openPrice')) or safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open')) or safe_float(quote.get('total', {}).get('open'))
-            high_p = safe_float(quote.get('highPrice')) or safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high')) or safe_float(quote.get('total', {}).get('high'))
-            low_p = safe_float(quote.get('lowPrice')) or safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low')) or safe_float(quote.get('total', {}).get('low'))
-            
+            open_p = safe_float(quote.get('priceOpen', {}).get('price')) or safe_float(quote.get('open')) or safe_float(quote.get('total', {}).get('open'))
+            high_p = safe_float(quote.get('priceHigh', {}).get('price')) or safe_float(quote.get('high')) or safe_float(quote.get('total', {}).get('high'))
+            low_p = safe_float(quote.get('priceLow', {}).get('price')) or safe_float(quote.get('low')) or safe_float(quote.get('total', {}).get('low'))
             time_str = quote.get('lastUpdated')
             try:
                 dt_object = datetime.fromtimestamp(time_str / 1000000)
@@ -286,61 +288,63 @@ def calculate_indicators(df):
     except: pass
     return df
 
-# --- V24.2: 基本面混合運算 (Hybrid Calculation) ---
-# 說明：本函數會接收一個 optional 的 current_price，如果 Yahoo 沒給價格，就用 Fugle 的即時價來算 PE/Yield
+# --- V25.0: 強力基本面計算 (Raw Data Calculation) ---
 def get_fundamentals(stock_obj, current_price=None):
     try:
+        # 1. 決定價格
         info = stock_obj.info
-        
-        # 1. 決定計算用的股價 (優先用 Fugle 即時價 > Yahoo 即時價 > Yahoo 昨收)
         calc_price = current_price
         if not calc_price:
             calc_price = info.get('currentPrice') or info.get('previousClose')
+        
+        # 2. 殖利率 (Yield) - 暴力法：抓過去1年配息總和 / 股價
+        div_yield_str = "N/A"
+        try:
+            divs = stock_obj.dividends
+            if not divs.empty:
+                # 篩選最近 365 天的配息
+                one_year_ago = pd.Timestamp.now() - pd.Timedelta(days=365)
+                recent_divs = divs[divs.index >= one_year_ago.tz_localize(divs.index.tz)]
+                total_div = recent_divs.sum()
+                if total_div > 0 and calc_price:
+                    yield_val = total_div / calc_price
+                    div_yield_str = f"{round(yield_val*100, 2)}% (實算)"
+        except: pass
 
-        # 2. 本益比 (PE) - 優先用 Yahoo 給的，沒有就自己算
+        # 3. 本益比 (PE) - 優先用 info, 失敗則顯示 N/A (EPS資料太難抓準)
         pe_show = "N/A"
         pe_raw = info.get('trailingPE')
-        
-        if pe_raw:
-            pe_show = round(pe_raw, 2)
-        elif calc_price:
-            # 手動計算: 股價 / EPS
-            eps = info.get('trailingEps') or info.get('forwardEps')
-            if eps and eps > 0:
-                pe_manual = calc_price / eps
-                pe_show = f"{round(pe_manual, 2)} (估)"
+        if pe_raw: pe_show = round(pe_raw, 2)
 
-        # 3. 殖利率 (Yield) - 優先用 Yahoo 給的，沒有就自己算
-        div_yield_str = "N/A"
-        div_yield = info.get('dividendYield')
-        
-        if div_yield:
-            div_yield_str = f"{round(div_yield*100, 2)}%"
-        elif calc_price:
-            # 手動計算: 配息 / 股價
-            div_rate = info.get('dividendRate') or info.get('trailingAnnualDividendRate')
-            if div_rate:
-                yield_manual = div_rate / calc_price
-                div_yield_str = f"{round(yield_manual*100, 2)}% (估)"
-
-        # 4. 營收 YoY
-        rev_growth = info.get('revenueGrowth')
-        yoy_str = f"{round(rev_growth * 100, 2)}%" if rev_growth else "N/A"
-        yoy_c = "normal" if isinstance(rev_growth, float) and rev_growth > 0 else "inverse"
-        
-        # 5. 營收 QoQ
+        # 4. 營收 YoY/QoQ - 暴力法：抓季報表計算
+        yoy_str = "N/A"; yoy_c = "off"
         qoq_str = "N/A"; qoq_c = "off"
-        try:
-            financials = stock_obj.quarterly_financials
-            if not financials.empty and 'Total Revenue' in financials.index:
-                rev_curr = financials.loc['Total Revenue'].iloc[0]
-                rev_prev = financials.loc['Total Revenue'].iloc[1]
-                qoq_val = (rev_curr - rev_prev) / rev_prev
-                qoq_str = f"{round(qoq_val * 100, 2)}%"
-                qoq_c = "normal" if qoq_val > 0 else "inverse"
-        except: pass
         
+        try:
+            # 嘗試抓取季度財務報表
+            q_fin = stock_obj.quarterly_financials
+            if not q_fin.empty and 'Total Revenue' in q_fin.index:
+                # 確保按日期排序 (最新的在最前)
+                q_fin = q_fin.sort_index(axis=1, ascending=False)
+                revs = q_fin.loc['Total Revenue']
+                
+                if len(revs) >= 2:
+                    # QoQ: 本季 vs 上季
+                    q0 = revs.iloc[0]; q1 = revs.iloc[1]
+                    qoq = (q0 - q1) / q1
+                    qoq_str = f"{round(qoq*100, 2)}%"
+                    qoq_c = "normal" if qoq > 0 else "inverse"
+                
+                if len(revs) >= 5:
+                    # YoY: 本季 vs 去年同季 (index 4)
+                    q4 = revs.iloc[4]
+                    yoy = (q0 - q4) / q4
+                    yoy_str = f"{round(yoy*100, 2)}%"
+                    yoy_c = "normal" if yoy > 0 else "inverse"
+        except: pass
+
         return pe_show, div_yield_str, yoy_str, qoq_str, yoy_c, qoq_c
+        
     except: return "N/A", "N/A", "N/A", "N/A", "off", "off"
 
 def calculate_valuation_matrix(stock_obj, current_price):
@@ -425,7 +429,7 @@ def train_and_predict_ai(df):
     latest_data = X.iloc[[-1]]; prediction = model.predict(latest_data); prob = model.predict_proba(latest_data)[0][1]
     return acc, prediction[0], prob, model.feature_importances_, features
 
-# --- Header: 即時報價 ---
+# --- Header: 即時報價 + V19.3 總經戰情 ---
 stock_name = st.session_state.watchlist.get(selected_code, selected_code)
 c_head1, c_head2 = st.columns([3, 1])
 with c_head1: st.markdown(f"### ⚡ 即時報價：{stock_name} ({selected_code})")
@@ -512,7 +516,7 @@ with tab1:
             else: df_view.index = df_view.index.strftime('%Y-%m-%d')
             latest = df.iloc[-1]
             
-            # V24.2: 傳入 Fugle 價格進行混合運算
+            # V25.0: 使用混合運算抓取基本面 (需傳入即時股價)
             current_fugle_price = rt_data.get('price') if rt_data else None
             pe, div, yoy, qoq, yoy_c, qoq_c = get_fundamentals(ticker_obj, current_fugle_price)
             
@@ -911,7 +915,6 @@ with tab7:
     c_link2.link_button(f"🐳 主力動向 (Goodinfo)", f"https://goodinfo.tw/tw/ShowK_Chart.asp?STOCK_ID={selected_code}&CHT_CAT2=DATE", icon="🌊")
     c_link3.link_button("🏛️ 集保結算所 (官方)", "https://www.tdcc.com.tw/portal/zh/smWeb/qryStock", icon="🇹🇼")
 
-# V21.1 分頁 8: 資金流向
 with tab8:
     st.subheader("🌊 資金流向儀表板 - 誰在吸金？")
     st.info("分析各族群今日的【平均漲跌幅】與【預估成交金額】，找出資金流入的強勢板塊。")
