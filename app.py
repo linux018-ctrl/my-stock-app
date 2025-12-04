@@ -16,8 +16,8 @@ from fugle_marketdata import RestClient
 from datetime import datetime
 
 # --- 網頁設定 ---
-st.set_page_config(page_title="艾倫杭特 V25.2", layout="wide")
-st.title("📈 艾倫杭特 V25.2 - 硬核財報運算版")
+st.set_page_config(page_title="艾倫杭特 V26.0", layout="wide")
+st.title("📈 艾倫杭特 V26.0 - 數據透視診斷版")
 
 # ==========================================
 # 🔐 讀取金鑰保險箱 (Secrets)
@@ -194,7 +194,7 @@ def safe_float(val):
     try: return float(val)
     except: return None
 
-# --- V24.3: Fugle 報價 (修復欄位對應) ---
+# --- V24.3: Fugle 報價 ---
 def get_realtime_quote_fugle(code):
     if not fugle_client: return None, None
     try:
@@ -220,7 +220,7 @@ def get_realtime_quote_fugle(code):
                 time_str = dt_object.strftime("%H:%M:%S")
             except: pass
             
-            # 備援: 若 Fugle 缺資料，用 Yahoo 歷史補 OHLC
+            # 備援
             if open_p is None:
                 try:
                     y_t = yf.Ticker(f"{code}.TW"); y_h = y_t.history(period="1d")
@@ -258,7 +258,6 @@ def get_macro_data():
         if not hist.empty:
             now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; data['10Y Price (IEF)'] = (now, now - prev)
     except: pass
-    
     futures_done = False
     for f_sym in ["FITX=F", "WTX=F"]:
         try:
@@ -267,7 +266,6 @@ def get_macro_data():
                 now = hist['Close'].iloc[-1]; prev = hist['Close'].iloc[-2]; data['台指期'] = (now, now - prev); futures_done = True; break
         except: pass
     if not futures_done: data['台指期'] = ("N/A", 0)
-
     return data
 
 # --- 核心功能區 ---
@@ -298,71 +296,99 @@ def calculate_indicators(df):
     except: pass
     return df
 
-# --- V25.2: 基本面暴力運算 (Hardcore Calculation) ---
+# --- V26.0: 數據透視診斷版 (回傳更多 Debug 資訊) ---
 def get_fundamentals(stock_obj, current_price=None):
+    
+    # 用來存 Debug 資訊的字典
+    debug_info = {
+        "info_pe": None, "info_eps": None, 
+        "cal_pe": None, "cal_eps_sum": None,
+        "info_yield": None, "cal_yield": None, "cal_div_sum": None,
+        "financials_empty": True, "dividends_empty": True
+    }
+
     try:
         info = stock_obj.info
         
-        # 1. 決定計算股價 (優先用 Fugle 即時價)
+        # 1. 決定價格
         calc_price = current_price
         if not calc_price:
             calc_price = info.get('currentPrice') or info.get('previousClose')
         
-        # 2. 本益比 (PE) - 暴力法: 抓季報算 EPS 總和
+        # 2. 抓取原始資料表
+        q_fin = stock_obj.quarterly_financials
+        debug_info['financials_empty'] = q_fin.empty
+        
+        divs = stock_obj.dividends
+        debug_info['dividends_empty'] = divs.empty
+
+        # 3. 本益比 (PE)
         pe_show = "N/A"
         pe_raw = info.get('trailingPE')
+        debug_info['info_pe'] = pe_raw
+        
         if pe_raw:
             pe_show = round(pe_raw, 2)
-        elif calc_price:
-            try:
-                # 嘗試抓損益表 (Income Statement)
-                fin = stock_obj.quarterly_financials
-                if not fin.empty and 'Basic EPS' in fin.index:
-                    # 抓最近 4 季 EPS 加總
-                    eps_series = fin.loc['Basic EPS'].head(4)
-                    ttm_eps = eps_series.sum()
-                    if ttm_eps > 0:
-                        pe_show = f"{round(calc_price / ttm_eps, 2)} (實算)"
-            except: pass
+        elif calc_price and not q_fin.empty:
+            # 暴力搜尋 EPS 欄位
+            eps_key = None
+            for k in ['Basic EPS', 'Diluted EPS', 'Earnings Per Share']:
+                if k in q_fin.index:
+                    eps_key = k
+                    break
+            
+            if eps_key:
+                # 抓最近 4 季加總
+                eps_series = q_fin.loc[eps_key].head(4)
+                ttm_eps = eps_series.sum()
+                debug_info['cal_eps_sum'] = ttm_eps
+                if ttm_eps > 0:
+                    pe_val = calc_price / ttm_eps
+                    pe_show = f"{round(pe_val, 2)} (實算)"
+                    debug_info['cal_pe'] = pe_val
 
-        # 3. 殖利率 (Yield) - 暴力法: 抓配息歷史
+        # 4. 殖利率 (Yield)
         div_yield_str = "N/A"
-        try:
-            divs = stock_obj.dividends
-            if not divs.empty:
-                # 抓最近 365 天配息
-                one_year_ago = pd.Timestamp.now() - pd.Timedelta(days=365)
-                # 移除時區以免報錯
-                divs.index = divs.index.tz_localize(None)
-                recent_divs = divs[divs.index >= one_year_ago]
-                total_div = recent_divs.sum()
-                
-                if total_div > 0 and calc_price:
-                    y_val = (total_div / calc_price) * 100
-                    div_yield_str = f"{round(y_val, 2)}% (實算)"
-        except: 
-            # 備用 info
-            d = info.get('dividendYield')
-            if d: div_yield_str = f"{round(d*100, 2)}%"
+        d_yield = info.get('dividendYield')
+        debug_info['info_yield'] = d_yield
+        
+        if d_yield:
+            div_yield_str = f"{round(d_yield*100, 2)}%"
+        elif calc_price and not divs.empty:
+            # 實算
+            one_year = pd.Timestamp.now() - pd.Timedelta(days=365)
+            divs.index = divs.index.tz_localize(None)
+            recent_divs = divs[divs.index >= one_year]
+            total_div = recent_divs.sum()
+            debug_info['cal_div_sum'] = total_div
+            
+            if total_div > 0:
+                y_val = (total_div / calc_price) * 100
+                div_yield_str = f"{round(y_val, 2)}% (實算)"
+                debug_info['cal_yield'] = y_val
 
-        # 4. 營收 YoY/QoQ - 暴力法: 抓季報
+        # 5. 營收 YoY/QoQ
         yoy_str = "N/A"; yoy_c = "off"
         qoq_str = "N/A"; qoq_c = "off"
         
-        try:
-            q_fin = stock_obj.quarterly_financials
-            # 彈性搜尋營收欄位
+        # 優先用 info
+        rev_g = info.get('revenueGrowth')
+        if rev_g:
+            yoy_str = f"{round(rev_g*100, 2)}%"
+            yoy_c = "normal" if rev_g > 0 else "inverse"
+            
+        # 嘗試實算
+        if not q_fin.empty:
             rev_key = None
             for k in ['Total Revenue', 'Operating Revenue', 'Revenue']:
                 if k in q_fin.index:
                     rev_key = k
                     break
             
-            if not q_fin.empty and rev_key:
+            if rev_key:
                 q_fin = q_fin.sort_index(axis=1, ascending=False)
                 revs = q_fin.loc[rev_key]
                 
-                # QoQ (本季 vs 上季)
                 if len(revs) >= 2:
                     q0 = revs.iloc[0]; q1 = revs.iloc[1]
                     if q1 and q1 != 0:
@@ -370,17 +396,16 @@ def get_fundamentals(stock_obj, current_price=None):
                         qoq_str = f"{round(qoq*100, 2)}% (實算)"
                         qoq_c = "normal" if qoq > 0 else "inverse"
                 
-                # YoY (本季 vs 去年同季)
-                if len(revs) >= 5:
+                if yoy_str == "N/A" and len(revs) >= 5:
                     q0 = revs.iloc[0]; q4 = revs.iloc[4]
                     if q4 and q4 != 0:
                         yoy = (q0 - q4) / q4
                         yoy_str = f"{round(yoy*100, 2)}% (實算)"
                         yoy_c = "normal" if yoy > 0 else "inverse"
-        except: pass
-        
-        return pe_show, div_yield_str, yoy_str, qoq_str, yoy_c, qoq_c
-    except: return "N/A", "N/A", "N/A", "N/A", "off", "off"
+
+        return pe_show, div_yield_str, yoy_str, qoq_str, yoy_c, qoq_c, debug_info, q_fin, divs
+    except Exception as e:
+        return "N/A", "N/A", "N/A", "N/A", "off", "off", {"error": str(e)}, None, None
 
 def calculate_valuation_matrix(stock_obj, current_price):
     try:
@@ -551,9 +576,9 @@ with tab1:
             else: df_view.index = df_view.index.strftime('%Y-%m-%d')
             latest = df.iloc[-1]
             
-            # V25.2: 硬核財報運算 (傳入 Fugle 價格)
+            # V26.0: 數據透視診斷 (取得 raw data)
             current_fugle_price = rt_data.get('price') if rt_data else None
-            pe, div, yoy, qoq, yoy_c, qoq_c = get_fundamentals(ticker_obj, current_fugle_price)
+            pe, div, yoy, qoq, yoy_c, qoq_c, debug_info, raw_fin, raw_divs = get_fundamentals(ticker_obj, current_fugle_price)
             
             val_matrix = calculate_valuation_matrix(ticker_obj, latest['Close'])
             st.subheader(f"{stock_name} ({selected_code}) - {timeframe}技術分析")
@@ -588,6 +613,22 @@ with tab1:
             st.markdown("---")
             f1, f2, f3, f4 = st.columns(4)
             f1.metric("本益比", pe); f2.metric("殖利率", div); f3.metric("營收 YoY", yoy, delta_color=yoy_c); f4.metric("營收 QoQ", qoq, delta_color=qoq_c)
+            
+            # V26.0: 新增除錯用按鈕
+            with st.expander("🔍 [除錯] 查看原始財報數據 (Raw Financials)"):
+                st.write("**Debug Info:**", debug_info)
+                st.markdown("#### 📊 季報表 (Quarterly Financials)")
+                if raw_fin is not None and not raw_fin.empty:
+                    st.dataframe(raw_fin)
+                else:
+                    st.warning("Yahoo 未回傳此股票的季報表數據。")
+                
+                st.markdown("#### 💸 配息紀錄 (Dividends)")
+                if raw_divs is not None and not raw_divs.empty:
+                    st.dataframe(raw_divs)
+                else:
+                    st.warning("Yahoo 未回傳此股票的配息數據。")
+
             fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.5, 0.2, 0.15, 0.15], subplot_titles=("K線 & 布林通道", "成交量", "MACD", "KD"))
             fig.add_trace(go.Candlestick(x=df_view.index, open=df_view['Open'], high=df_view['High'], low=df_view['Low'], close=df_view['Close'], name='K線', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_view.index, y=df_view['SMA20'], line=dict(color='orange', width=1), name='月線'), row=1, col=1)
@@ -617,6 +658,7 @@ with tab1:
                 else: st.info("暫無相關新聞")
             except: st.warning("新聞載入失敗。")
 
+# Tab 2-8 (請使用 V23.3 的程式碼，此處省略以保持簡潔，請務必複製回來！)
 with tab2:
     st.subheader("🤖 觀察名單掃描器")
     st.info("💡 提示：點擊表格中的任一行，即可自動切換至該個股的詳細分析。")
@@ -655,8 +697,11 @@ with tab2:
                     except: pass
             except Exception as e: pass
             progress_bar.progress((i+1)/total)
+        
+        # V24.0: 修正縮排
         progress_bar.empty()
         st.session_state.scan_result_tab2 = pd.DataFrame(scan_results)
+    
     if st.session_state.scan_result_tab2 is not None and not st.session_state.scan_result_tab2.empty:
         res_df = st.session_state.scan_result_tab2
         if st.button("📤 將掃描結果傳送到 LINE (Tab2)"):
@@ -715,8 +760,11 @@ with tab3:
                     except: pass
             except: pass
             progress_bar.progress((i+1)/total_scan)
+        
+        # V24.0 修正
         progress_bar.empty()
         st.session_state.scan_result_tab3 = pd.DataFrame(reversal_stocks)
+
     if st.session_state.scan_result_tab3 is not None and not st.session_state.scan_result_tab3.empty:
         rev_df = st.session_state.scan_result_tab3
         st.success(f"發現 {len(rev_df)} 檔潛在轉折股！")
@@ -741,7 +789,7 @@ with tab4:
         if target_sector_f == "你的觀察名單": scan_list_f = list(st.session_state.watchlist.keys())
         else: scan_list_f = SECTOR_DICT[target_sector_f]
         fund_results = []
-        progress_bar = st.progress(0)
+        progress_bar = st.progress(0) # V24.0 修正
         status = st.empty()
         total_scan = len(scan_list_f)
         for i, code in enumerate(scan_list_f):
@@ -759,8 +807,11 @@ with tab4:
                     fund_results.append(item)
             except: pass
             progress_bar.progress((i+1)/total_scan)
+        
+        # V24.0 修正
         progress_bar.empty()
         st.session_state.scan_result_tab4 = pd.DataFrame(fund_results)
+    
     if st.session_state.scan_result_tab4 is not None and not st.session_state.scan_result_tab4.empty:
         fund_df = st.session_state.scan_result_tab4
         st.balloons()
